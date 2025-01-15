@@ -45,7 +45,26 @@ class ContrastiveLoss(torch.nn.Module):
                                       label * torch.pow(torch.clamp(self.margin - euclidean_distance, min=0.0), 2))
 
         return loss_contrastive
-
+    
+class MyContrastiveLoss(torch.nn.Module):
+    """
+    Contrastive loss function with my idea.
+    euclidean_distance -> angular distance
+    + reconstruction loss
+    """
+    def __init__(self, margin=1.0, recon_w=0.5):
+        super(MyContrastiveLoss, self).__init__()
+        self.margin = margin
+        self.recon_w = recon_w
+    
+    def forward(self, output1, output2, label, recon):
+        angular_distance = F.cosine_similarity(output1, output2, dim=-1)
+        loss_contrastive = torch.mean((1-label) * torch.pow(angular_distance, 2) +
+                                      label * torch.pow(torch.clamp(self.margin - angular_distance, min=0.0), 2))
+        loss_contrastive_w_recon = loss_contrastive + self.recon_w * F.mse_loss(recon, output1)
+        return loss_contrastive_w_recon
+    
+    
 
 class FocalLoss(nn.Module):
     def __init__(self, alpha=0.25, gamma=2, weight=None, ignore_index=255):
