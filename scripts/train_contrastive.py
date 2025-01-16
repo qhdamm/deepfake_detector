@@ -1,3 +1,5 @@
+# bash로 실행시 권한 부여: chmod +x train.sh
+
 import argparse
 import warnings
 import sys
@@ -50,6 +52,10 @@ def get_parser():
     parser.add_argument('--memory_size', default=None, type=int)
     parser.add_argument("opts", help="Modify config options using the command-line", default=None,
                         nargs=argparse.REMAINDER)
+    parser.add_argument('--loss_mode', default='drct', type=str, help='Setting the loss mode: drct or mine')
+    parser.add_argument('--recon_weight', default=0.3, type=float, help='Setting the recon weight')
+    parser.add_argument('--real_weight', default=0.3, type=float, help='Setting the real weight')
+    parser.add_argument('--delta', default=1.0, type=float, help='Setting the delta')
     args = parser.parse_args()
 
     return args
@@ -98,34 +104,89 @@ def eval_model(model, epoch, eval_loader, is_save=True, threshold=0.5, alpha=0.5
     eval_process = tqdm(eval_loader)
     labels = []
     outputs = []
+
     with torch.no_grad():
         for i, (img, label) in enumerate(eval_process):
-            img, label = merge_tensor(img, label, is_train=False)
+            optimizer.zero_grad()
+            current_lr = optimizer.param_groups[0]['lr']
+
+            if i > 0 and i % 1 == 0:
+                eval_process.set_description("Epoch: %d, LR: %.8f, Loss: %.4f, Acc: %.4f" % (
+                    epoch, current_lr, losses.avg, accuracies.avg))
+
+            if args.loss_mode == 'mine':
+                # img shape: [batch_size, 4, 3, 224, 224]
+                batch_size, num_views, channels, height, width = img.shape
+
+                real_images = img[:, 0, :, :, :].cuda()  # Real images
+                real_recons = img[:, 1, :, :, :].cuda()  # Real reconstructions
+                fake_images = img[:, 2, :, :, :].cuda()  # Fake images
+                fake_recons = img[:, 3, :, :, :].cuda()  # Fake reconstructions
+
+                # Generate embeddings for each view and reshape to [batch_size, 4, embedding_size]
+                real_embeddings = model(real_images, return_feature=True)[1].unsqueeze(1)  # [batch_size, 1, embedding_size]
+                real_recon_embeddings = model(real_recons, return_feature=True)[1].unsqueeze(1)  # [batch_size, 1, embedding_size]
+                fake_embeddings = model(fake_images, return_feature=True)[1].unsqueeze(1)  # [batch_size, 1, embedding_size]
+                fake_recon_embeddings = model(fake_recons, return_feature=True)[1].unsqueeze(1)  # [batch_size, 1, embedding_size]
+
+                combined_embeddings = torch.cat([
+                    real_embeddings,
+                    real_recon_embeddings,
+                    fake_embeddings,
+                    fake_recon_embeddings
+                ], dim=1)  # [batch_size, 4, embedding_size]
+
+                label = label.cuda()
+
+                y_pred, _ = model(img.view(-1, channels, height, width).cuda(), return_feature=True)
+                y_pred = nn.Softmax(dim=1)(y_pred)
+
+                # Pass combined embeddings and labels to contrastive_loss
+                loss = (1 - alpha) * criterion(y_pred, label.view(-1)) + alpha * contrastive_loss(
+                    combined_embeddings, label
+                )
+
+                outputs.append(1 - y_pred[:, 0])
+                labels.append(label)
+                acc = (torch.max(y_pred.detach(), 1)[1] == label.view(-1)).sum().item() / label.view(-1).size(0)
+                losses.update(loss.item(), label.view(-1).size(0))
+                accuracies.update(acc, label.view(-1).size(0))
+            
+            else:  # args.loss_mode == 'drct'
+                img, label = merge_tensor(img, label, is_train=False)
+
+                img, label = img.cuda(), label.cuda()
+
+                y_pred, embeddings = model(img, return_feature=True)
+                y_pred = nn.Softmax(dim=1)(y_pred)
+
+                loss = (1 - alpha) * criterion(y_pred, label) + alpha * contrastive_loss(embeddings, label)
+
+                outputs.append(1 - y_pred[:, 0])
+                labels.append(label)
+                acc = (torch.max(y_pred.detach(), 1)[1] == label).sum().item() / img.size(0)
+                losses.update(loss.item(), img.size(0))
+                accuracies.update(acc, img.size(0))
+
             if i > 0 and i % 1 == 0:
                 eval_process.set_description("Epoch: %d, Loss: %.4f, Acc: %.4f" %
                                              (epoch, losses.avg, accuracies.avg))
-            img, label = img.cuda(), label.cuda()
-
-            y_pred, embeddings = model(img, return_feature=True)
-            y_pred = nn.Softmax(dim=1)(y_pred)
-            loss = (1 - alpha) * criterion(y_pred, label) + alpha * contrastive_loss(embeddings, label)
-
-            outputs.append(1 - y_pred[:, 0])
-            labels.append(label)
-            acc = (torch.max(y_pred.detach(), 1)[1] == label).sum().item() / img.size(0)
-            losses.update(loss.item(), img.size(0))
-            accuracies.update(acc, img.size(0))
 
     outputs = torch.cat(outputs, dim=0).cpu().numpy()
     labels = torch.cat(labels, dim=0).cpu().numpy()
     labels[labels > 0] = 1
-    auc = roc_auc_score(labels, outputs)
-    recall = recall_score(labels, outputs > threshold)
-    precision = precision_score(labels, outputs > threshold)
-    binary_acc = accuracy_score(labels, outputs > threshold)
-    f1 = f1_score(labels, outputs > threshold)
-    fnr = calculate_fnr(labels, outputs > threshold)
+    if args.loss_mode == 'mine':
+        labels_flatten = labels.flatten()
+    else:
+        labels_flatten = labels
+    auc = roc_auc_score(labels_flatten, outputs)
+    recall = recall_score(labels_flatten, outputs > threshold)
+    precision = precision_score(labels_flatten, outputs > threshold)
+    binary_acc = accuracy_score(labels_flatten, outputs > threshold)
+    f1 = f1_score(labels_flatten, outputs > threshold)
+    fnr = calculate_fnr(labels_flatten, outputs > threshold)
     print(f'AUC:{auc}-Recall:{recall}-Precision:{precision}-BinaryAccuracy:{binary_acc}, f1: {f1}, fnr:{fnr}')
+
     if is_save:
         train_logger.log(phase="val", values={
             'epoch': epoch,
@@ -133,6 +194,7 @@ def eval_model(model, epoch, eval_loader, is_save=True, threshold=0.5, alpha=0.5
             'acc': format(accuracies.avg, '.4f'),
             'lr': optimizer.param_groups[0]['lr']
         })
+
     print("Val:\t Loss:{0:.4f} \t Acc:{1:.4f}".format(losses.avg, accuracies.avg))
 
     if save_txt is not None:
@@ -141,13 +203,16 @@ def eval_model(model, epoch, eval_loader, is_save=True, threshold=0.5, alpha=0.5
     return accuracies.avg
 
 
+
+
+
 def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
     model.train()
     losses = AverageMeter()
     accuracies = AverageMeter()
     training_process = tqdm(train_loader)
+
     for i, (XI, label) in enumerate(training_process):
-        XI, label = merge_tensor(XI, label, is_train=True)
         optimizer.zero_grad()
         current_lr = optimizer.param_groups[0]['lr']
         if i > 0 and i % 1 == 0:
@@ -155,35 +220,76 @@ def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
                 "Epoch: %d, LR: %.8f, Loss: %.4f, Acc: %.4f" % (
                     epoch, current_lr, losses.avg, accuracies.avg))
 
-        x, label = XI.cuda(), label.cuda()
-        # Forward pass: Compute predicted y by passing x to the model
+        if args.loss_mode == 'mine':
+            # Unpack data for 'mine' mode
+        
+            real, real_recon, fake, fake_recon = XI[:, 0], XI[:, 1], XI[:, 2], XI[:, 3]
+            real, real_recon = real.cuda(), real_recon.cuda()
+            fake, fake_recon = fake.cuda(), fake_recon.cuda()
+            label = torch.stack([torch.tensor(l, dtype=torch.long) for l in label]).transpose(0, 1).cuda()
+
+
+            # Concatenate all embeddings for the forward pass
+            embeddings = torch.cat([real, real_recon, fake, fake_recon], dim=0)
+
+        elif args.loss_mode == 'drct':
+            # Process data normally for 'drct' mode
+            XI, label = merge_tensor(XI, label, is_train=True)
+            embeddings = XI.cuda()
+            label = label.cuda()
+
+        # Forward pass
         if scaler is None:
-            y_pred, embeddings = model(x, return_feature=True)
+            y_pred, embeddings = model(embeddings, return_feature=True)
             # Compute and print loss
-            loss = (1-alpha) * criterion(y_pred, label) + alpha * contrastive_loss(embeddings, label)
-            acc = (torch.max(y_pred.detach(), 1)[1] == label).sum().item() / x.size(0)
-            losses.update(loss.item(), x.size(0))
-            accuracies.update(acc, x.size(0))
+            if args.loss_mode == 'mine':
+                y_pred = y_pred.view(args.batch_size, 4, -1)
+                y_pred = y_pred.reshape(-1, y_pred.size(-1)) 
+                new_label = label.reshape(-1)
+                embeddings = embeddings.view(args.batch_size, 4, -1)
+                total_num = 4*args.batch_size
+            else:
+                new_label = label
+                total_num = embeddings.size(0)
+    
+            loss = (1-alpha) * criterion(y_pred, new_label) + alpha * contrastive_loss(embeddings, label)
+            acc = (torch.max(y_pred.detach(), 1)[1] == new_label).sum().item() / total_num
+            losses.update(loss.item(), total_num)
+            accuracies.update(acc, total_num)
 
             loss.backward()
             optimizer.step()
         else:
             with autocast():
-                y_pred, embeddings = model(x, return_feature=True)
+                y_pred, embeddings = model(embeddings, return_feature=True)
+                if args.loss_mode == 'mine':
+                    y_pred = y_pred.view(args.batch_size, 4, -1)
+                    y_pred = y_pred.reshape(-1, y_pred.size(-1)) 
+                    new_label = label.reshape(-1)
+                    embeddings = embeddings.view(args.batch_size, 4, -1)
+                    total_num = 4*args.batch_size
+                else:
+                    new_label = label
+                    total_num = embeddings.size(0)
                 # Compute and print loss
-                loss = (1-alpha) * criterion(y_pred, label) + alpha * contrastive_loss(embeddings, label)
-            acc = (torch.max(y_pred.detach(), 1)[1] == label).sum().item() / x.size(0)
-            losses.update(loss.item(), x.size(0))
-            accuracies.update(acc, x.size(0))
+                loss = (1-alpha) * criterion(y_pred, new_label) + alpha * contrastive_loss(embeddings, label)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+
+        # Compute metrics
+        acc = (torch.max(y_pred.detach(), 1)[1] == new_label).sum().item() / total_num
+        losses.update(loss.item(), total_num)
+        accuracies.update(acc, total_num)
+
         if args.is_warmup:
             with warmup_scheduler.dampening():
                 scheduler.step()
+
     if not args.is_warmup:
         scheduler.step()
+
     train_logger.log(phase="train", values={
         'epoch': epoch,
         'loss': format(losses.avg, '.4f'),
@@ -191,13 +297,17 @@ def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
         'lr': optimizer.param_groups[0]['lr']
     })
     print("Train:\t Loss:{0:.4f} \t Acc:{1:.4f}".format(losses.avg, accuracies.avg))
-    # 垃圾回收
+
+    # Clear memory
+    torch.cuda.empty_cache()
     del losses, accuracies
     gc.collect()
 
 
+
 # python train.py --device_id=0 --model_name=efficientnet-b0 --input_size=224 --batch_size=48 --fake_indexes=1 --is_amp --save_flag=
 if __name__ == '__main__':
+    torch.cuda.empty_cache()
     batch_size = args.batch_size * torch.cuda.device_count()
     writeFile = f"../output/{args.dataset_name}/{args.fake_indexes.replace(',', '_')}/" \
                 f"{args.model_name.split('/')[-1]}_{args.input_size}{args.save_flag}/logs"
@@ -218,10 +328,14 @@ if __name__ == '__main__':
         model = model.cuda()
     criterion = nn.CrossEntropyLoss()
     # criterion = LabelSmoothing(smoothing=0.05).cuda(device_id)
+    if args.loss_mode == 'mine':
+        args.loss_name = 'MyContrastiveLoss'
     contrastive_loss = CombinedLoss(loss_name=args.loss_name, embedding_size=args.embedding_size,
                                     pos_margin=args.pos_margin, neg_margin=args.neg_margin, tau=args.tau,
-                                    memory_size=args.memory_size, use_miner=args.use_miner, num_classes=args.num_classes)
+                                    memory_size=args.memory_size, use_miner=args.use_miner, num_classes=args.num_classes,
+                                    recon_weight=args.recon_weight, real_weight=args.real_weight, delta=args.delta)
     is_train = not args.is_test
+    print(f"EXPERIMENT: {args.loss_mode})")
     if is_train:
         if store_name and not os.path.exists(store_name):
             os.makedirs(store_name)
@@ -229,15 +343,15 @@ if __name__ == '__main__':
         # setting data loader
         xdl = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes, phase='train',
                                    num_classes=args.num_classes, inpainting_dir=args.inpainting_dir, is_dire=args.is_dire,
-                                   transform=create_train_transforms(size=args.input_size, is_crop=args.is_crop)
+                                   transform=create_train_transforms(size=args.input_size, is_crop=args.is_crop), mode=args.loss_mode
                                    )
         sampler = BalanceClassSampler(labels=xdl.get_labels(), mode=args.sampler_mode) if args.sampler_mode != '' else None  # "upsampling"
-        train_loader = DataLoader(xdl, batch_size=batch_size, shuffle=sampler is None, num_workers=args.num_workers, sampler=sampler)
+        train_loader = DataLoader(xdl, batch_size=batch_size, shuffle=sampler is None, num_workers=args.num_workers, sampler=sampler, drop_last=True)   
         train_dataset_len = len(xdl)
 
         xdl_eval = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes, phase='val',
                                         num_classes=args.num_classes, inpainting_dir=args.inpainting_dir, is_dire=args.is_dire,
-                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop)
+                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop), mode=args.loss_mode
                                         )
         eval_loader = DataLoader(xdl_eval, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
         eval_dataset_len = len(xdl_eval)
@@ -278,7 +392,8 @@ if __name__ == '__main__':
         xdl_test = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.ake_indexes,
                                         phase='test', num_classes=args.num_classes, is_dire=args.is_dire,
                                         post_aug_mode=args.post_aug_mode, inpainting_dir=args.inpainting_dir,
-                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop)
+                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop),
+                                        mode=args.loss_mode
                                         )
         test_loader = DataLoader(xdl_test, batch_size=batch_size, shuffle=False, num_workers=4)
         test_dataset_len = len(xdl_test)
