@@ -280,8 +280,10 @@ def load_GenImage(root_path='/disk1/chenby/dataset/AIGC_data/GenImage', phase='t
     return total_images, labels
 
 
+import random
+
 def load_data(real_root_path, fake_root_path,
-              phase='train', val_split=0.1, seed=2022, ):
+              phase='train', val_split=0.1, seed=2022, data_size=0):
     # load real images
     total_real_images, total_real_captions = [], []
     for real_root in real_root_path.split(','):
@@ -294,12 +296,71 @@ def load_data(real_root_path, fake_root_path,
         fake_images_t, fake_captions_t = load_normal_data(fake_root, val_split, seed, phase)
         total_fake_images += list(fake_images_t)
         total_fake_captions += list(fake_captions_t)
-    # 合并
+    
+    # Merge real and fake images
     image_paths = total_real_images + total_fake_images
     labels = [0 for _ in total_real_images] + [1 for _ in total_fake_images]
-    print(f'{phase}-total:{len(image_paths)}, real:{len(total_real_images)},fake:{len(total_fake_images)}')
-
+    
+    # Shuffle and split data if data_size is specified
+    if data_size != 0:
+        random.seed(seed)
+        combined = list(zip(image_paths, labels))
+        random.shuffle(combined)
+        image_paths, labels = zip(*combined[:data_size])
+        split_idx = int(len(image_paths) * (1 - val_split))
+        if phase == 'train':
+            image_paths, labels = image_paths[:split_idx], labels[:split_idx]
+        else:
+            image_paths, labels = image_paths[split_idx:], labels[split_idx:]
+    
+    print(f'{phase}-total:{len(image_paths)}, real:{len(total_real_images)}, fake:{len(total_fake_images)}')
     return image_paths, labels
+
+def load_each_data(real_root_path, fake_root_path,
+                   phase='train', val_split=0.1, seed=2022, data_size=0):
+    total_real_images = []
+    for real_root in real_root_path.split(','):
+        real_images_t, _ = load_normal_data(real_root, val_split, seed, phase)
+        total_real_images.extend(real_images_t)
+
+    total_real_recon_images, total_fake_images, total_fake_recon_images = [], [], []
+    real_recon_path, fake_path, fake_recon_path = fake_root_path.split(',')
+    
+    for real_recon_root in real_recon_path.split(','):
+        real_recon_images_t, _ = load_normal_data(real_recon_root, val_split, seed, phase)
+        total_real_recon_images.extend(real_recon_images_t)
+
+    for fake_root in fake_path.split(','):
+        fake_images_t, _ = load_normal_data(fake_root, val_split, seed, phase)
+        total_fake_images.extend(fake_images_t)
+
+    for fake_recon_root in fake_recon_path.split(','):
+        fake_recon_images_t, _ = load_normal_data(fake_recon_root, val_split, seed, phase)
+        total_fake_recon_images.extend(fake_recon_images_t)
+
+    min_size = min(len(total_real_images), len(total_real_recon_images), len(total_fake_images), len(total_fake_recon_images))
+    total_real_images = total_real_images[:min_size]
+    total_real_recon_images = total_real_recon_images[:min_size]
+    total_fake_images = total_fake_images[:min_size]
+    total_fake_recon_images = total_fake_recon_images[:min_size]
+
+    image_paths = list(zip(total_real_images, total_real_recon_images, total_fake_images, total_fake_recon_images))
+    labels = [(0, 1, 1, 1) for _ in total_real_images]
+    
+    if data_size != 0:
+        random.seed(seed)
+        combined = list(zip(image_paths, labels))
+        random.shuffle(combined)
+        image_paths, labels = zip(*combined[:data_size])
+        split_idx = int(len(image_paths) * (1 - val_split))
+        if phase == 'train':
+            image_paths, labels = image_paths[:split_idx], labels[:split_idx]
+        else:
+            image_paths, labels = image_paths[split_idx:], labels[split_idx:]
+
+    print(f'{phase}-total # of pairs of 4 images: {len(image_paths)}')
+    return image_paths, labels
+
 
 
 def load_pair_data(root_path, fake_root_path=None, phase='train', seed=2023, fake_indexes='1',
@@ -370,7 +431,7 @@ class AIGCDetectionDataset(Dataset):
     def __init__(self, root_path='/disk4/chenby/dataset/MSCOCO', fake_root_path='/disk4/chenby/dataset/DRCT-2M',
                  fake_indexes='1,2,3,4,5,6', phase='train', is_one_hot=False, seed=2021,
                  transform=None, use_label=True, num_classes=None, regex='*.*',
-                 is_dire=False, inpainting_dir='full_inpainting', post_aug_mode=None):
+                 is_dire=False, inpainting_dir='full_inpainting', post_aug_mode=None, mode='drct', data_size=0):
         self.root_path = root_path  # real 图像的根目录
         self.phase = phase
         self.is_one_hot = is_one_hot
@@ -381,6 +442,9 @@ class AIGCDetectionDataset(Dataset):
         self.is_dire = is_dire  # training by DIRE
         self.post_aug_mode = post_aug_mode  # 抗后处理测试模式：[blur_1, blur_2, blur_3, blur4, jpeg_30, jpeg_40, ..., jpeg_100]
         self.seed = seed
+        self.mode = mode
+        self.data_size=data_size
+      
 
         if use_label:
             if self.is_dire:
@@ -396,10 +460,17 @@ class AIGCDetectionDataset(Dataset):
                 self.image_paths, self.labels = load_GenImage(root_path=root_path, phase=phase, seed=seed,
                                                               indexes=fake_indexes)
             else:
-                self.image_paths, self.labels = load_data(real_root_path=root_path, fake_root_path=fake_root_path,
-                                                          phase=phase, seed=seed)
-
-            self.labels = [int(label > 0)for label in self.labels] if self.num_classes == 2 else self.labels
+                if self.mode == 'drct':
+                    self.image_paths, self.labels = load_data(real_root_path=root_path, fake_root_path=fake_root_path,
+                                                            phase=phase, seed=seed, data_size=data_size)
+                elif self.mode == 'mine':
+                    self.image_paths, self.labels = load_each_data(real_root_path=root_path, fake_root_path=fake_root_path,
+                                                            phase=phase, seed=seed, data_size=data_size)
+            if self.mode == 'drct':
+                self.labels = [int(label > 0)for label in self.labels] if self.num_classes == 2 else self.labels
+            else:
+                # labels: [(0, 1.2, 1, 1), ...]
+                self.labels = [tuple(int(l > 0) for l in label) for label in self.labels if self.num_classes == 2]
         else:
             if len(root_path.split(',')) == 2 and 'DR' in root_path:
                 self.is_dire = True
@@ -421,54 +492,117 @@ class AIGCDetectionDataset(Dataset):
         return list(self.labels)
 
     def __getitem__(self, index):
-        if not self.is_dire:
-            image_path = self.image_paths[index]
-            image, is_success = read_image(image_path)
-        else:
-            image_path, rec_image_path = self.image_paths[index]
-            image, is_success = read_image(image_path)
-            rec_image, rec_is_success = read_image(rec_image_path)
-            is_success = is_success and rec_is_success
-            image = calculate_dire(image, rec_image, phase=self.phase)
+        if self.mode == 'drct':
+            if not self.is_dire:
+                image_path = self.image_paths[index]
+                image, is_success = read_image(image_path)
+            else:
+                image_path, rec_image_path = self.image_paths[index]
+                image, is_success = read_image(image_path)
+                rec_image, rec_is_success = read_image(rec_image_path)
+                is_success = is_success and rec_is_success
+                image = calculate_dire(image, rec_image, phase=self.phase)
+            # 후처리 공격 테스트 (optional)
+            if self.phase == 'test' and self.post_aug_mode is not None:
+                if 'jpeg' in self.post_aug_mode:
+                    compress_val = int(self.post_aug_mode.split('_')[1])
+                    image = cv2_jpg(image, compress_val)
+                elif 'scale' in self.post_aug_mode:
+                    scale = float(self.post_aug_mode.split('_')[1])
+                    image = cv2_scale(image, scale)
 
-        # 测试后处理攻击
-        if self.phase == 'test' and self.post_aug_mode is not None:
-            if 'jpeg' in self.post_aug_mode:
-                compress_val = int(self.post_aug_mode.split('_')[1])
-                image = cv2_jpg(image, compress_val)
-            elif 'scale' in self.post_aug_mode:
-                scale = float(self.post_aug_mode.split('_')[1])
-                image = cv2_scale(image, scale)
+            label = 0  # default label
+            if self.use_label:
+                label = self.labels[index] if is_success else 0
 
-        label = 0  # default label
-        if self.use_label:
+            if self.transform is not None and not self.is_dire:
+                try:
+                    if isinstance(self.transform, torchvision.transforms.transforms.Compose):
+                        image = self.transform(Image.fromarray(image))
+                    else:
+                        data = self.transform(image=image)
+                        image = data["image"]
+                except:
+                    print("transform error!!!")
+                    image = np.zeros(shape=(512, 512, 3), dtype=np.uint8)
+                    if isinstance(self.transform, torchvision.transforms.transforms.Compose):
+                        image = self.transform(Image.fromarray(image))
+                    else:
+                        data = self.transform(image=image)
+                        image = data["image"]
+                    label = 0
+
+            if not self.use_label:
+                return image, image_path.replace(f"{self.root_path}", '')  # os.path.basename(image_path)
+
+            if self.is_one_hot:
+                label = one_hot(self.num_classes, label)
+
+            return image, label
+
+        elif self.mode == 'mine':
+            # self.image_paths: (real, real_recon, fake, fake_recon) pair
+            # self.labels: (0, 1, 1, 1) pair
+            real_image_path, real_recon_image_path, fake_image_path, fake_recon_image_path = self.image_paths[index]
+
+            real, real_success = read_image(real_image_path)
+            real_recon, real_recon_success = read_image(real_recon_image_path)
+            fake, fake_success = read_image(fake_image_path)
+            fake_recon, fake_recon_success = read_image(fake_recon_image_path)
+
+            is_success = real_success and real_recon_success and fake_success and fake_recon_success
+
+            # 후처리 공격 테스트 (optional)
+            if self.phase == 'test' and self.post_aug_mode is not None:
+                if 'jpeg' in self.post_aug_mode:
+                    compress_val = int(self.post_aug_mode.split('_')[1])
+                    real = cv2_jpg(real, compress_val)
+                    real_recon = cv2_jpg(real_recon, compress_val)
+                    fake = cv2_jpg(fake, compress_val)
+                    fake_recon = cv2_jpg(fake_recon, compress_val)
+                elif 'scale' in self.post_aug_mode:
+                    scale = float(self.post_aug_mode.split('_')[1])
+                    real = cv2_scale(real, scale)
+                    real_recon = cv2_scale(real_recon, scale)
+                    fake = cv2_scale(fake, scale)
+                    fake_recon = cv2_scale(fake_recon, scale)
+
+            # 변환 (Transform) 적용
+            if self.transform is not None:
+                try:
+                    if isinstance(self.transform, torchvision.transforms.Compose):
+                        real = self.transform(Image.fromarray(real))
+                        real_recon = self.transform(Image.fromarray(real_recon))
+                        fake = self.transform(Image.fromarray(fake))
+                        fake_recon = self.transform(Image.fromarray(fake_recon))
+                    else:
+                        real = self.transform(image=real)["image"]
+                        real_recon = self.transform(image=real_recon)["image"]
+                        fake = self.transform(image=fake)["image"]
+                        fake_recon = self.transform(image=fake_recon)["image"]
+                except:
+                    print("transform error!!!")
+                    real = real_recon = fake = fake_recon = np.zeros(shape=(512, 512, 3), dtype=np.uint8)
+                    if isinstance(self.transform, torchvision.transforms.Compose):
+                        real = self.transform(Image.fromarray(real))
+                        real_recon = self.transform(Image.fromarray(real_recon))
+                        fake = self.transform(Image.fromarray(fake))
+                        fake_recon = self.transform(Image.fromarray(fake_recon))
+                    else:
+                        real = self.transform(image=real)["image"]
+                        real_recon = self.transform(image=real_recon)["image"]
+                        fake = self.transform(image=fake)["image"]
+                        fake_recon = self.transform(image=fake_recon)["image"]
+                    label = 0
+
+            data = torch.stack([real, real_recon, fake, fake_recon], dim=0)
+
+            # 라벨 설정 (optional)
             label = self.labels[index] if is_success else 0
+            if self.is_one_hot:
+                label = one_hot(self.num_classes, label)
+            else:
+                label = torch.tensor(label) 
 
-        if self.transform is not None and not self.is_dire:
-            try:
-                if isinstance(self.transform, torchvision.transforms.transforms.Compose):
-                    image = self.transform(Image.fromarray(image))
-                else:
-                    data = self.transform(image=image)
-                    image = data["image"]
-            except:
-                print("transform error!!!")
-                image = np.zeros(shape=(512, 512, 3), dtype=np.uint8)
-                if isinstance(self.transform, torchvision.transforms.transforms.Compose):
-                    image = self.transform(Image.fromarray(image))
-                else:
-                    data = self.transform(image=image)
-                    image = data["image"]
-                label = 0
-
-        if not self.use_label:
-            return image, image_path.replace(f"{self.root_path}", '')  # os.path.basename(image_path)
-
-        if self.is_one_hot:
-            label = one_hot(self.num_classes, label)
-
-        return image, label
-
-
-
-
+            # 반환
+            return data, label

@@ -56,6 +56,7 @@ def get_parser():
     parser.add_argument('--recon_weight', default=0.3, type=float, help='Setting the recon weight')
     parser.add_argument('--real_weight', default=0.3, type=float, help='Setting the real weight')
     parser.add_argument('--delta', default=1.0, type=float, help='Setting the delta')
+    parser.add_argument('--data_size', default=0, type=int, help='Data size')
     args = parser.parse_args()
 
     return args
@@ -343,7 +344,8 @@ if __name__ == '__main__':
         # setting data loader
         xdl = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes, phase='train',
                                    num_classes=args.num_classes, inpainting_dir=args.inpainting_dir, is_dire=args.is_dire,
-                                   transform=create_train_transforms(size=args.input_size, is_crop=args.is_crop), mode=args.loss_mode
+                                   transform=create_train_transforms(size=args.input_size, is_crop=args.is_crop), 
+                                   mode=args.loss_mode, data_size=args.data_size
                                    )
         sampler = BalanceClassSampler(labels=xdl.get_labels(), mode=args.sampler_mode) if args.sampler_mode != '' else None  # "upsampling"
         train_loader = DataLoader(xdl, batch_size=batch_size, shuffle=sampler is None, num_workers=args.num_workers, sampler=sampler, drop_last=True)   
@@ -351,8 +353,9 @@ if __name__ == '__main__':
 
         xdl_eval = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes, phase='val',
                                         num_classes=args.num_classes, inpainting_dir=args.inpainting_dir, is_dire=args.is_dire,
-                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop), mode=args.loss_mode
+                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop), mode=args.loss_mode, data_size=args.data_size
                                         )
+        
         eval_loader = DataLoader(xdl_eval, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
         eval_dataset_len = len(xdl_eval)
         print('train_dataset_len:', train_dataset_len, 'eval_dataset_len:', eval_dataset_len)
