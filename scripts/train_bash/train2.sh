@@ -9,14 +9,14 @@ fi
 
 
 # Define the paths
-real_path="/home/student1/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/nature/crop"
-real_recon_path="/home/student1/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/nature/inpainting"
-fake_path="/home/student1/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/ai/crop"
-fake_recon_path="/home/student1/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/ai/inpainting"
+real_path="/mnt/work/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/nature/crop"
+real_recon_path="/mnt/work/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/nature/inpainting"
+fake_path="/mnt/work/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/ai/crop"
+fake_recon_path="/mnt/work/deepfake_detector/DR/GenImage/stable_diffusion_v_1_4/imagenet_ai_0419_sdv4/train/ai/inpainting"
 fake_root_path="${real_recon_path},${fake_path},${fake_recon_path}"
 
 # Other variables
-dataset_name="DRCT-2M"
+dataset_name="GenImage"
 model_name="convnext_base_in22k"
 embedding_size=1024
 input_size=224
@@ -29,15 +29,16 @@ is_amp="--is_amp"
 is_crop="--is_crop"
 num_workers=12
 save_flag="_drct_amp_crop"
-loss_mode="mine"  # drct or mine
+loss_mode="mine"  # drct or mine, 여기서부터 내가 추가한 것들
+data_size=10000  # 0이면 모든 데이터
 recon_weight=10
-real_weight=1
+real_weight=1.0
 delta=1.0
 save_flag="ext_${EXPERIMENT_NAME}"
 
 
 # Run the python script with the defined parameters
-python /home/student1/deepfake_detector/scripts/train_contrastive.py --root_path $real_path \
+python /mnt/work/deepfake_detector/scripts/train_contrastive.py --root_path $real_path \
                             --fake_root_path $fake_root_path \
                             --dataset_name $dataset_name \
                             --model_name $model_name \
@@ -51,8 +52,8 @@ python /home/student1/deepfake_detector/scripts/train_contrastive.py --root_path
                             $is_amp \
                             $is_crop \
                             --num_workers $num_workers \
-                            --save_flag $save_flag \
                             --loss_mode $loss_mode \
+                            --data_size $data_size \
                             --recon_weight $recon_weight \
                             --real_weight $real_weight \
                             --delta $delta \
