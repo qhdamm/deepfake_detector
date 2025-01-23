@@ -11,17 +11,18 @@ import albumentations as A
 import gc
 
 GenImage_LIST = [
-    'stable_diffusion_v_1_4/imagenet_ai_0419_sdv4', 'stable_diffusion_v_1_5/imagenet_ai_0424_sdv5',
-    'Midjourney/imagenet_midjourney', 'ADM/imagenet_ai_0508_adm', 'wukong/imagenet_ai_0424_wukong',
-    'glide/imagenet_glide', 'VQDM/imagenet_ai_0419_vqdm', 'BigGAN/imagenet_ai_0419_biggan'
+    'stable_diffusion_v_1_4/imagenet_ai_0419_sdv4'
+    # 'stable_diffusion_v_1_4/imagenet_ai_0419_sdv4', 'stable_diffusion_v_1_5/imagenet_ai_0424_sdv5',
+    # 'Midjourney/imagenet_midjourney', 'ADM/imagenet_ai_0508_adm', 'wukong/imagenet_ai_0424_wukong',
+    # 'glide/imagenet_glide', 'VQDM/imagenet_ai_0419_vqdm', 'BigGAN/imagenet_ai_0419_biggan'
 ]
-DRCT_2M_LIST = [
-    'ldm-text2im-large-256', 'stable-diffusion-v1-4', 'stable-diffusion-v1-5', 'stable-diffusion-2-1',
-    'stable-diffusion-xl-base-1.0', 'stable-diffusion-xl-refiner-1.0', 'sd-turbo', 'sdxl-turbo',
-    'lcm-lora-sdv1-5', 'lcm-lora-sdxl',  'sd-controlnet-canny',
-    'sd21-controlnet-canny', 'controlnet-canny-sdxl-1.0', 'stable-diffusion-inpainting',
-    'stable-diffusion-2-inpainting', 'stable-diffusion-xl-1.0-inpainting-0.1',
-]
+# DRCT_2M_LIST = [
+#     'ldm-text2im-large-256', 'stable-diffusion-v1-4', 'stable-diffusion-v1-5', 'stable-diffusion-2-1',
+#     'stable-diffusion-xl-base-1.0', 'stable-diffusion-xl-refiner-1.0', 'sd-turbo', 'sdxl-turbo',
+#     'lcm-lora-sdv1-5', 'lcm-lora-sdxl',  'sd-controlnet-canny',
+#     'sd21-controlnet-canny', 'controlnet-canny-sdxl-1.0', 'stable-diffusion-inpainting',
+#     'stable-diffusion-2-inpainting', 'stable-diffusion-xl-1.0-inpainting-0.1',
+# ]
 
 def create_crop_transforms(height=224, width=224):
     aug_list = [
@@ -42,7 +43,7 @@ def set_seed(seed: int):
 
 def find_nearest_multiple(a, multiple=8):
     """
-    找到最接近a的multiple倍数，且该倍数大于a
+    a의 가장 가까운 배수를 찾아라. 그 배수는 a보다 커야 한다.
     """
     n = a // multiple
     remainder = a % multiple
@@ -55,7 +56,9 @@ def find_nearest_multiple(a, multiple=8):
 
 
 def pad_image_to_size(image, target_width=224, target_height=224, fill_value=255):
-    """将图像填充为目标宽度和高度，使用指定的填充值（默认为255）"""
+    """
+    이미지를 지정된 너비와 높이로 채우고 지정된 채우기 값(기본값은 255)을 사용합니다.
+    """
 
     height, width = image.shape[:2]
 
@@ -86,7 +89,7 @@ def pad_image_to_size(image, target_width=224, target_height=224, fill_value=255
 def center_crop(image, crop_width, crop_height):
     height, width = image.shape[:2]
 
-    # 计算裁剪区域的起始点和终点
+    # 자르기 영역의 시작점과 끝점을 계산
     if width > crop_width:
         start_x = (width - crop_width) // 2
         end_x = start_x + crop_width
@@ -131,7 +134,7 @@ def read_image(image_path, max_size=512):
     width = width if width < max_size else max_size
     transform = create_crop_transforms(height=height, width=width)
     image = transform(image=image)["image"]
-    # 处理8的倍数
+    # pad image
     original_shape = image.shape
     new_height = find_nearest_multiple(original_shape[0], multiple=8)
     new_width = find_nearest_multiple(original_shape[1], multiple=8)
@@ -154,9 +157,9 @@ def func(image_path, save_path, crop_save_path, step=50, max_size=1024):
                                             height=image.shape[0],
                                             width=image.shape[1],
                                             seed=2023, guidance_scale=7.5)
-    # 恢复原来的尺寸
+    # crop image
     new_image = new_image.crop(box=(0, 0, original_shape[1], original_shape[0]))
-    # 保存结果
+    # save image
     new_image.save(save_path)
     if not os.path.exists(crop_save_path):
         image = Image.fromarray(image).crop(box=(0, 0, original_shape[1], original_shape[0]))
@@ -166,7 +169,7 @@ def func(image_path, save_path, crop_save_path, step=50, max_size=1024):
 if __name__ == '__main__':
     # load stable diffusion models
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    root = '/disk2/chenby/nas_dsw/dataset/AIGC_data'
+    root = '/mnt/work/deepfake_detector'
 
     sd_model_names = ["runwayml/stable-diffusion-inpainting",
                       "stabilityai/stable-diffusion-2-inpainting",
@@ -199,16 +202,16 @@ if __name__ == '__main__':
     print(f"Load model successful:{sd_model_name}")
 
 
-    # Create "SDv1-DR", "SDv2-DR" and "SDXL-DR" from MSCOCO dataset
-    step = 50
-    phase = 'train'
-    model_name = 'real'
-    inpainting_dir = {0: 'full_inpainting', 1: 'full_inpainting2', 2: 'full_inpainting_xl'}[index]
-    if step != 50:
-        inpainting_dir = f'step{step}_{inpainting_dir}'
-    image_root = f'{root}/MSCOCO/{phase}2017'
-    save_root = f'{root}/DR/MSCOCO/{inpainting_dir}/{phase}2017'
-    crop_root = None
+    # # Create "SDv1-DR", "SDv2-DR" and "SDXL-DR" from MSCOCO dataset
+    # step = 50
+    # phase = 'train'
+    # model_name = 'real'
+    # inpainting_dir = {0: 'full_inpainting', 1: 'full_inpainting2', 2: 'full_inpainting_xl'}[index]
+    # if step != 50:
+    #     inpainting_dir = f'step{step}_{inpainting_dir}'
+    # image_root = f'{root}/MSCOCO/{phase}2017'
+    # save_root = f'{root}/DR/MSCOCO/{inpainting_dir}/{phase}2017'
+    # crop_root = None
 
     # Create reconstructed images for the DRCT-2M dataset.
     # step = 50
@@ -224,7 +227,7 @@ if __name__ == '__main__':
 
     # Create reconstructed images for the GenImage dataset.
     # step = 50
-    # phase = 'train'
+    # phase = 'val'
     # label = 'ai'
     # inpainting_dir = {0: 'inpainting', 1: 'inpainting2', 2: 'inpainting_xl'}[index]
     # model_index = 0
@@ -232,6 +235,16 @@ if __name__ == '__main__':
     # image_root = f'{root}/GenImage/{model_name}/{phase}/{label}'
     # save_root = f'{root}/DR/GenImage/{model_name}/{phase}/{label}/{inpainting_dir}'
     # crop_root = f'{root}/DR/GenImage/{model_name}/{phase}/{label}/crop'
+
+    step = 50
+    phase = 'val'
+    label = 'nature'
+    inpainting_dir = {0: 'inpainting', 1: 'inpainting2', 2: 'inpainting_xl'}[index]
+    model_index = 0
+    model_name = GenImage_LIST[model_index]
+    image_root = f'{root}/GenImage/{model_name}/{phase}/{label}'
+    save_root = f'{root}/DR/GenImage/{model_name}/{phase}/{label}/{inpainting_dir}'
+    crop_root = f'{root}/DR/GenImage/{model_name}/{phase}/{label}/crop'
 
     os.makedirs(save_root, exist_ok=True)
     if crop_root is not None:
