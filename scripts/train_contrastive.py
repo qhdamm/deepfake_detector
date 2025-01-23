@@ -57,6 +57,7 @@ def get_parser():
     parser.add_argument('--real_weight', default=0.3, type=float, help='Setting the real weight')
     parser.add_argument('--delta', default=1.0, type=float, help='Setting the delta')
     parser.add_argument('--data_size', default=0, type=int, help='Data size')
+    parser.add_argument('--astep', default=1, type=int, help='Setting the accumulation steps')
     args = parser.parse_args()
 
     return args
@@ -84,6 +85,7 @@ from network.models import get_models
 from data.dataset import AIGCDetectionDataset, CLASS2LABEL_MAPPING, GenImage_LIST
 from utils.losses import LabelSmoothing, CombinedLoss, FocalLoss
 from data.transform import create_train_transforms, create_val_transforms
+
 
 
 def merge_tensor(img, label, is_train=True):
@@ -207,14 +209,15 @@ def eval_model(model, epoch, eval_loader, is_save=True, threshold=0.5, alpha=0.5
 
 
 
-def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
+def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5, accumulation_steps=1):
     model.train()
     losses = AverageMeter()
     accuracies = AverageMeter()
     training_process = tqdm(train_loader)
 
+    optimizer.zero_grad()  # 최적화기 초기화
+
     for i, (XI, label) in enumerate(training_process):
-        optimizer.zero_grad()
         current_lr = optimizer.param_groups[0]['lr']
         if i > 0 and i % 1 == 0:
             training_process.set_description(
@@ -223,12 +226,10 @@ def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
 
         if args.loss_mode == 'mine':
             # Unpack data for 'mine' mode
-        
             real, real_recon, fake, fake_recon = XI[:, 0], XI[:, 1], XI[:, 2], XI[:, 3]
             real, real_recon = real.cuda(), real_recon.cuda()
             fake, fake_recon = fake.cuda(), fake_recon.cuda()
             label = torch.stack([torch.tensor(l, dtype=torch.long) for l in label]).transpose(0, 1).cuda()
-
 
             # Concatenate all embeddings for the forward pass
             embeddings = torch.cat([real, real_recon, fake, fake_recon], dim=0)
@@ -239,51 +240,51 @@ def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
             embeddings = XI.cuda()
             label = label.cuda()
 
-        # Forward pass
+        # Forward pass with autocasting
         if scaler is None:
             y_pred, embeddings = model(embeddings, return_feature=True)
-            # Compute and print loss
-            if args.loss_mode == 'mine':
-                y_pred = y_pred.view(args.batch_size, 4, -1)
-                y_pred = y_pred.reshape(-1, y_pred.size(-1)) 
-                new_label = label.reshape(-1)
-                embeddings = embeddings.view(args.batch_size, 4, -1)
-                total_num = 4*args.batch_size
-            else:
-                new_label = label
-                total_num = embeddings.size(0)
-    
-            loss = (1-alpha) * criterion(y_pred, new_label) + alpha * contrastive_loss(embeddings, label)
-            acc = (torch.max(y_pred.detach(), 1)[1] == new_label).sum().item() / total_num
-            losses.update(loss.item(), total_num)
-            accuracies.update(acc, total_num)
-
-            loss.backward()
-            optimizer.step()
         else:
             with autocast():
                 y_pred, embeddings = model(embeddings, return_feature=True)
-                if args.loss_mode == 'mine':
-                    y_pred = y_pred.view(args.batch_size, 4, -1)
-                    y_pred = y_pred.reshape(-1, y_pred.size(-1)) 
-                    new_label = label.reshape(-1)
-                    embeddings = embeddings.view(args.batch_size, 4, -1)
-                    total_num = 4*args.batch_size
-                else:
-                    new_label = label
-                    total_num = embeddings.size(0)
-                # Compute and print loss
-                loss = (1-alpha) * criterion(y_pred, new_label) + alpha * contrastive_loss(embeddings, label)
 
+        # Loss computation
+        if args.loss_mode == 'mine':
+            y_pred = y_pred.view(args.batch_size, 4, -1)
+            y_pred = y_pred.reshape(-1, y_pred.size(-1)) 
+            new_label = label.reshape(-1)
+            embeddings = embeddings.view(args.batch_size, 4, -1)
+            total_num = 4 * args.batch_size
+        else:
+            new_label = label
+            total_num = embeddings.size(0)
+   
+
+        loss = (1 - alpha) * criterion(y_pred, new_label) + alpha * contrastive_loss(embeddings, label)
+
+        # Backward pass with gradient accumulation
+        loss = loss / accumulation_steps  # 축적 단계를 고려한 손실 스케일링
+
+        if scaler is None:
+            loss.backward()
+        else:
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+
+        # Gradient accumulation step
+        if (i + 1) % accumulation_steps == 0:
+            if scaler is None:
+                optimizer.step()
+            else:
+                scaler.step(optimizer)
+                scaler.update()
+
+            optimizer.zero_grad()  # 기울기 초기화
 
         # Compute metrics
         acc = (torch.max(y_pred.detach(), 1)[1] == new_label).sum().item() / total_num
-        losses.update(loss.item(), total_num)
+        losses.update(loss.item() * accumulation_steps, total_num)  # 원래 크기 복원
         accuracies.update(acc, total_num)
 
+        # Learning rate scheduling during warmup
         if args.is_warmup:
             with warmup_scheduler.dampening():
                 scheduler.step()
@@ -303,6 +304,7 @@ def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5):
     torch.cuda.empty_cache()
     del losses, accuracies
     gc.collect()
+
 
 
 
@@ -329,8 +331,7 @@ if __name__ == '__main__':
         model = model.cuda()
     criterion = nn.CrossEntropyLoss()
     # criterion = LabelSmoothing(smoothing=0.05).cuda(device_id)
-    if args.loss_mode == 'mine':
-        args.loss_name = 'MyContrastiveLoss'
+
     contrastive_loss = CombinedLoss(loss_name=args.loss_name, embedding_size=args.embedding_size,
                                     pos_margin=args.pos_margin, neg_margin=args.neg_margin, tau=args.tau,
                                     memory_size=args.memory_size, use_miner=args.use_miner, num_classes=args.num_classes,
@@ -356,7 +357,7 @@ if __name__ == '__main__':
                                         transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop), mode=args.loss_mode, data_size=args.data_size
                                         )
         
-        eval_loader = DataLoader(xdl_eval, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
+        eval_loader = DataLoader(xdl_eval, batch_size=batch_size, shuffle=False, num_workers=args.num_workers, drop_last=True)
         eval_dataset_len = len(xdl_eval)
         print('train_dataset_len:', train_dataset_len, 'eval_dataset_len:', eval_dataset_len)
 
@@ -372,7 +373,10 @@ if __name__ == '__main__':
 
         best_acc = 0.5 if args.epoch_start == 0 else eval_model(model, args.epoch_start - 1, eval_loader, is_save=False)
         for epoch in range(args.epoch_start, args.num_epochs):
-            train_model(model, criterion, optimizer, epoch, scaler=GradScaler() if args.is_amp else None, alpha=args.alpha)
+            if args.loss_mode == 'mine':
+                train_model(model, criterion, optimizer, epoch, scaler=GradScaler() if args.is_amp else None, alpha=args.alpha, accumulation_steps=args.astep)
+            else:
+                train_model(model, criterion, optimizer, epoch, scaler=GradScaler() if args.is_amp else None, alpha=args.alpha, accumulation_steps=1)
             if epoch % 1 == 0 or epoch == args.num_epochs - 1:
                 acc = eval_model(model, epoch, eval_loader, alpha=args.alpha)
                 if best_acc < acc:

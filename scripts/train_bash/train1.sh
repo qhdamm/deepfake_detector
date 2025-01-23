@@ -22,18 +22,20 @@ embedding_size=1024
 input_size=224
 batch_size=32
 fake_indexes=2
-num_epochs=5
+num_epochs=17
 device_id="0"
 lr=0.0001
 is_amp="--is_amp"
 is_crop="--is_crop"
 num_workers=12
 save_flag="_drct_amp_crop"
-loss_mode="drct"  # drct or mine, 여기서부터 내가 추가한 것들
-data_size=10000  # 0이면 모든 데이터
-recon_weight=10
-real_weight=1.0
-delta=1.0
+loss_mode="mine"  # drct or mine, 여기서부터 내가 추가한 것들
+loss_name="MyContrastiveLoss"  # "ContrastiveLoss", 'MyContrastiveLoss', 'MyContrastiveLossFID'
+data_size=0  # 0이면 모든 데이터
+recon_weight=0.05
+real_weight=1.0  # max 1 없어도 됨
+delta=1
+astep=2
 save_flag="ext_${EXPERIMENT_NAME}"
 
 
@@ -53,8 +55,10 @@ python /mnt/work/deepfake_detector/scripts/train_contrastive.py --root_path "$re
                             $is_crop \
                             --num_workers $num_workers \
                             --loss_mode $loss_mode \
+                            --loss_name $loss_name \
                             --data_size $data_size \
                             --recon_weight $recon_weight \
                             --real_weight $real_weight \
                             --delta $delta \
+                            --astep $astep \
                             --save_flag $save_flag

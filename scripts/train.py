@@ -296,6 +296,7 @@ if __name__ == '__main__':
                                         transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop)
                                         )
         test_loader = DataLoader(xdl_test, batch_size=batch_size, shuffle=False, num_workers=4)
+
         test_dataset_len = len(xdl_test)
         print('test_dataset_len:', test_dataset_len)
         out_metrics = eval_model(model, epoch_start, test_loader, is_save=False, is_tta=False,

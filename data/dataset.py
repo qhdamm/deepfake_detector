@@ -251,7 +251,7 @@ def load_normal_data(root_path, val_split, seed, phase='train', regex='*.*', tes
     return images_t, captions_t
 
 
-def load_GenImage(root_path='/disk1/chenby/dataset/AIGC_data/GenImage', phase='train', seed=2023,
+def load_GenImage(root_path='/mnt/work/deepfake_detector/GenImage', phase='train', seed=2023,
                   indexes='1,2,3,4,5,6,7,8', val_split=0.1):
 
     indexes = [int(i) - 1 for i in indexes.split(',')]
@@ -262,6 +262,7 @@ def load_GenImage(root_path='/disk1/chenby/dataset/AIGC_data/GenImage', phase='t
     for i, selected_dir in enumerate(selected_dir_list):
         real_root = os.path.join(root_path, selected_dir, dir_phase, 'nature')
         fake_root = os.path.join(root_path, selected_dir, dir_phase, 'ai')
+
         real_images_t = sorted(glob.glob(f'{real_root}/*.*'))
         fake_images_t = sorted(glob.glob(f'{fake_root}/*.*'))
         if phase != 'test':
@@ -510,6 +511,13 @@ class AIGCDetectionDataset(Dataset):
                 elif 'scale' in self.post_aug_mode:
                     scale = float(self.post_aug_mode.split('_')[1])
                     image = cv2_scale(image, scale)
+                elif 'blur' in self.post_aug_mode:
+                    # 블러 커널 크기 지정 (예: "blur_5" -> 커널 크기 5x5)
+                    kernel_size = int(self.post_aug_mode.split('_')[1])
+                    real = cv2.GaussianBlur(real, (kernel_size, kernel_size), 0)
+                    real_recon = cv2.GaussianBlur(real_recon, (kernel_size, kernel_size), 0)
+                    fake = cv2.GaussianBlur(fake, (kernel_size, kernel_size), 0)
+                    fake_recon = cv2.GaussianBlur(fake_recon, (kernel_size, kernel_size), 0)
 
             label = 0  # default label
             if self.use_label:
@@ -566,6 +574,15 @@ class AIGCDetectionDataset(Dataset):
                     real_recon = cv2_scale(real_recon, scale)
                     fake = cv2_scale(fake, scale)
                     fake_recon = cv2_scale(fake_recon, scale)
+
+                elif 'blur' in self.post_aug_mode:
+                    # 블러 커널 크기 지정 (예: "blur_5" -> 커널 크기 5x5)
+                    kernel_size = int(self.post_aug_mode.split('_')[1])
+                    real = cv2.GaussianBlur(real, (kernel_size, kernel_size), 0)
+                    real_recon = cv2.GaussianBlur(real_recon, (kernel_size, kernel_size), 0)
+                    fake = cv2.GaussianBlur(fake, (kernel_size, kernel_size), 0)
+                    fake_recon = cv2.GaussianBlur(fake_recon, (kernel_size, kernel_size), 0)
+
 
             # 변환 (Transform) 적용
             if self.transform is not None:
