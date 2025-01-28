@@ -63,6 +63,7 @@ from tqdm import tqdm
 import gc
 from sklearn.metrics import roc_auc_score, recall_score, precision_score, accuracy_score, f1_score
 import pytorch_warmup as warmup
+import torch.nn.functional as F
 
 from utils.utils import Logger, AverageMeter, Test_time_agumentation, calculate_fnr
 from network.models import get_models
@@ -109,6 +110,7 @@ def eval_model(model, epoch, eval_loader, is_save=True, is_tta=False, threshold=
     outputs = []
     with torch.no_grad():
         for i, (img, label) in enumerate(eval_process):
+            img = F.normalize(img, p=2, dim=1)
             img, label = merge_tensor(img, label, is_train=False)
             if i > 0 and i % 1 == 0:
                 eval_process.set_description("Epoch: %d, Loss: %.4f, Acc: %.4f" %

@@ -85,6 +85,7 @@ from network.models import get_models
 from data.dataset import AIGCDetectionDataset, CLASS2LABEL_MAPPING, GenImage_LIST
 from utils.losses import LabelSmoothing, CombinedLoss, FocalLoss
 from data.transform import create_train_transforms, create_val_transforms
+import torch.nn.functional as F
 
 
 
@@ -125,6 +126,11 @@ def eval_model(model, epoch, eval_loader, is_save=True, threshold=0.5, alpha=0.5
                 real_recons = img[:, 1, :, :, :].cuda()  # Real reconstructions
                 fake_images = img[:, 2, :, :, :].cuda()  # Fake images
                 fake_recons = img[:, 3, :, :, :].cuda()  # Fake reconstructions
+
+                real_images = F.normalize(real_images, p=2, dim=1)
+                real_recons = F.normalize(real_recons, p=2, dim=1)
+                fake_images = F.normalize(fake_images, p=2, dim=1)
+                fake_recons = F.normalize(fake_recons, p=2, dim=1)
 
                 # Generate embeddings for each view and reshape to [batch_size, 4, embedding_size]
                 real_embeddings = model(real_images, return_feature=True)[1].unsqueeze(1)  # [batch_size, 1, embedding_size]
