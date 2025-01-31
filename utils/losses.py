@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.nn.functional import pairwise_distance
 from pytorch_metric_learning import losses, miners
 from pytorch_metric_learning.utils import loss_and_miner_utils as lmu
+from utils import info_nce_loss
 from pytorch_metric_learning.losses.generic_pair_loss import GenericPairLoss
 from pytorch_metric_learning.reducers import AvgNonZeroReducer
 
@@ -224,7 +225,7 @@ class MyContrastiveLoss1(GenericPairLoss):
         self.recon_weight = recon_weight
         self.delta = delta
         self.add_to_recordable_attributes(
-            list_of_names=["neg_margin", "recon_weight", "delta"], is_stat=False
+            list_of_names=["neg_margin","real_weight", "recon_weight", "delta"], is_stat=False
         )
 
     def _compute_loss(self, pos_pair_dist, neg_pair_dist):
@@ -400,16 +401,17 @@ class MyContrastiveLoss3(nn.Module):
 
 import torch
 import torch.nn.functional as F
-import scipy.linalg
+from scipy.spatial.distance import cdist
 
 class MyContrastiveLossEU(GenericPairLoss):
-    def __init__(self, neg_margin=1.0, recon_weight=0.1, delta=1.0, **kwargs):
+    def __init__(self, neg_margin=1.0, real_weight=0.5,recon_weight=0.1, delta=1.0, **kwargs):
         super().__init__(mat_based_loss=False, **kwargs)
         self.neg_margin = neg_margin
+        self.real_weight = real_weight
         self.recon_weight = recon_weight
         self.delta = delta
         self.add_to_recordable_attributes(
-            list_of_names=["neg_margin", "recon_weight", "delta"], is_stat=False
+            list_of_names=["neg_margin", "real_weight", "recon_weight", "delta"], is_stat=False
         )
 
     def _compute_loss(self, pos_pair_dist, neg_pair_dist):
@@ -433,7 +435,7 @@ class MyContrastiveLossEU(GenericPairLoss):
         all_images_flattened = all_images.view(all_images.size(0), -1)
 
         # Compute pairwise Euclidean distances
-        dist_matrix = torch.cdist(all_images_flattened, all_images_flattened, p=2)
+        dist_matrix = torch.cdist(all_images_flattened, all_images_flattened, compute_mode="donot_use_mm_for_euclid_dist")
 
         # Create masks for real and fake
         labels = labels.reshape(-1)
@@ -462,38 +464,24 @@ class MyContrastiveLossEU(GenericPairLoss):
         return total_loss
 
 
-class MyContrastiveLossFID(GenericPairLoss):
-    def __init__(self, neg_margin=1.0, recon_weight=0.1, delta=1.0, **kwargs):
+class MyContrastiveLossMahal(GenericPairLoss):
+    def __init__(self, neg_margin=1.0, real_weight=0.5,recon_weight=0.1, delta=1.0, **kwargs):
         super().__init__(mat_based_loss=False, **kwargs)
+        self.neg_margin = neg_margin
+        self.real_weight = real_weight
         self.recon_weight = recon_weight
         self.delta = delta
         self.add_to_recordable_attributes(
-            list_of_names=["recon_weight", "delta"], is_stat=False
+            list_of_names=["neg_margin", "real_weight", "recon_weight", "delta"], is_stat=False
         )
 
-    def compute_fid(self, real_embeddings, fake_embeddings):
-        # Compute means and covariances
-        real_mean = real_embeddings.mean(dim=0)
-        fake_mean = fake_embeddings.mean(dim=0)
-
-        real_cov = torch.cov(real_embeddings.T)
-        fake_cov = torch.cov(fake_embeddings.T)
-
-        # Convert to NumPy for sqrtm calculation
-        real_cov_np = real_cov.cpu().detach().numpy()
-        fake_cov_np = fake_cov.cpu().detach().numpy()
-
-        # Compute sqrtm using scipy
-        cov_sqrt, _ = scipy.linalg.sqrtm(real_cov_np @ fake_cov_np, disp=False)
-
-        # Handle numerical instability (convert back to tensor and take real part)
-        cov_sqrt = torch.tensor(cov_sqrt.real, dtype=real_cov.dtype, device=real_cov.device)
-
-        # Compute FID score
-        mean_diff = torch.norm(real_mean - fake_mean, p=2) ** 2
-        fid_score = mean_diff + torch.trace(real_cov + fake_cov - 2 * cov_sqrt)
-
-        return fid_score
+    def _compute_loss(self, pos_pair_dist, neg_pair_dist):
+        # For positive pairs, minimize Euclidean distance (close to 0)
+        pos_loss = torch.mean(pos_pair_dist ** 2) if pos_pair_dist.numel() > 0 else 0.0
+        
+        # For negative pairs, enforce margin separation
+        neg_loss = torch.mean(torch.clamp(self.neg_margin - neg_pair_dist, min=0.0) ** 2) if neg_pair_dist.numel() > 0 else 0.0
+        return pos_loss, neg_loss
 
     def forward(self, data, labels):
         real_images, real_recons, fake_images, fake_recons = zip(*data)
@@ -503,28 +491,97 @@ class MyContrastiveLossFID(GenericPairLoss):
         fake_images = torch.stack(fake_images)
         fake_recons = torch.stack(fake_recons)
 
-        # Normalize embeddings
+        # Flatten the images to treat them as feature vectors for distance computation
         all_images = torch.cat([real_images, real_recons, fake_images, fake_recons], dim=0)
-        embeddings = F.normalize(all_images, p=2, dim=1)
+        all_images_flattened = all_images.view(all_images.size(0), -1)
 
-        # Separate real and fake embeddings based on labels
+        # Compute pairwise Mahalanobis distances
+        dist_matrix = cdist(all_images_flattened, all_images_flattened, 'mahalanobis')
+
+        # Create masks for real and fake
         labels = labels.reshape(-1)
         real_indices = (labels == 1).nonzero(as_tuple=True)[0]
         fake_indices = (labels == 0).nonzero(as_tuple=True)[0]
 
-        real_embeddings = embeddings[real_indices]
-        fake_embeddings = embeddings[fake_indices]
+        # Positive pairs: real-real distance
+        pos_pair_dist = dist_matrix[real_indices][:, real_indices]
+        pos_pair_dist = pos_pair_dist[torch.triu_indices(len(real_indices), len(real_indices), offset=1)]
 
-        # Compute FID score
-        fid_loss = self.compute_fid(real_embeddings, fake_embeddings)
+        # Negative pairs: real-fake distance
+        neg_pair_dist = dist_matrix[real_indices][:, fake_indices].view(-1)
 
-        # Compute reconstruction difference loss
+        # Compute contrastive loss using Euclidean distance
+        pos_loss, neg_loss = self._compute_loss(pos_pair_dist, neg_pair_dist)
+        contrastive_loss = pos_loss + neg_loss
+
+        # Compute reconstruction difference loss (L1 distance)
         real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
-        fake_recon_dist = torch.norm(fake_images - fake_recons, p=1, dim=1)
+        fake_recon_dist = torch.norm(fake_images - fake_recons, p=1, dim=1) 
+
         recon_diff_loss = torch.mean(torch.clamp(real_recon_dist - fake_recon_dist + self.delta, min=0.0))
 
         # Combine all losses
-        total_loss = fid_loss + self.recon_weight * recon_diff_loss
+        total_loss = contrastive_loss + self.recon_weight * recon_diff_loss
+        return total_loss
+    
+class MyContrastiveLossManhattan(GenericPairLoss):
+    def __init__(self, neg_margin=1.0, real_weight=0.5,recon_weight=0.1, delta=1.0, **kwargs):
+        super().__init__(mat_based_loss=False, **kwargs)
+        self.neg_margin = neg_margin
+        self.real_weight = real_weight
+        self.recon_weight = recon_weight
+        self.delta = delta
+        self.add_to_recordable_attributes(
+            list_of_names=["neg_margin", "real_weight", "recon_weight", "delta"], is_stat=False
+        )
+
+    def _compute_loss(self, pos_pair_dist, neg_pair_dist):
+        # For positive pairs, minimize Euclidean distance (close to 0)
+        pos_loss = torch.mean(pos_pair_dist ** 2) if pos_pair_dist.numel() > 0 else 0.0
+        
+        # For negative pairs, enforce margin separation
+        neg_loss = torch.mean(torch.clamp(self.neg_margin - neg_pair_dist, min=0.0) ** 2) if neg_pair_dist.numel() > 0 else 0.0
+        return pos_loss, neg_loss
+
+    def forward(self, data, labels):
+        real_images, real_recons, fake_images, fake_recons = zip(*data)
+
+        real_images = torch.stack(real_images)
+        real_recons = torch.stack(real_recons)
+        fake_images = torch.stack(fake_images)
+        fake_recons = torch.stack(fake_recons)
+
+        # Flatten the images to treat them as feature vectors for distance computation
+        all_images = torch.cat([real_images, real_recons, fake_images, fake_recons], dim=0)
+        all_images_flattened = all_images.view(all_images.size(0), -1)
+
+        # Compute pairwise Mahalanobis distances
+        dist_matrix = cdist(all_images_flattened, all_images_flattened, 'cityblock')
+
+        # Create masks for real and fake
+        labels = labels.reshape(-1)
+        real_indices = (labels == 1).nonzero(as_tuple=True)[0]
+        fake_indices = (labels == 0).nonzero(as_tuple=True)[0]
+
+        # Positive pairs: real-real distance
+        pos_pair_dist = dist_matrix[real_indices][:, real_indices]
+        pos_pair_dist = pos_pair_dist[torch.triu_indices(len(real_indices), len(real_indices), offset=1)]
+
+        # Negative pairs: real-fake distance
+        neg_pair_dist = dist_matrix[real_indices][:, fake_indices].view(-1)
+
+        # Compute contrastive loss using Euclidean distance
+        pos_loss, neg_loss = self._compute_loss(pos_pair_dist, neg_pair_dist)
+        contrastive_loss = pos_loss + neg_loss
+
+        # Compute reconstruction difference loss (L1 distance)
+        real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
+        fake_recon_dist = torch.norm(fake_images - fake_recons, p=1, dim=1) 
+
+        recon_diff_loss = torch.mean(torch.clamp(real_recon_dist - fake_recon_dist + self.delta, min=0.0))
+
+        # Combine all losses
+        total_loss = contrastive_loss + self.recon_weight * recon_diff_loss
         return total_loss
 
 
@@ -579,17 +636,19 @@ class CombinedLoss(torch.nn.Module):
         elif loss_name == 'NTXentLoss':
             self.loss_fn = losses.NTXentLoss(temperature=tau)  # The MoCo paper uses 0.07, while SimCLR uses 0.5.
         elif loss_name == 'ContrastiveLoss':
-            self.loss_fn = ContrastiveLoss(neg_margin=neg_margin)
+            self.loss_fn = losses.ContrastiveLoss(neg_margin=neg_margin)
         elif loss_name == 'MyContrastiveLoss1':
-            self.loss_fn = MyContrastiveLoss1(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
+            self.loss_fn = MyContrastiveLoss1(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
         elif loss_name == 'MyContrastiveLoss2':
             self.loss_fn = MyContrastiveLoss2(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
         elif loss_name == 'MyContrastiveLoss3':
             self.loss_fn = MyContrastiveLoss3(recon_weight=recon_weight, delta=delta)
-        elif loss_name == 'MyContrastiveLossFID':
-            self.loss_fn = MyContrastiveLossFID(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
+        elif loss_name == 'MyContrastiveLossMahal':
+            self.loss_fn = MyContrastiveLossMahal(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
         elif loss_name == 'MyContrastiveLossEU':
-            self.loss_fn = MyContrastiveLossEU(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
+            self.loss_fn = MyContrastiveLossEU(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
+        elif loss_name == 'MyContrastiveLossManhattan':
+            self.loss_fn = MyContrastiveLossManhattan(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
         else:
             self.loss_fn = ContrastiveLoss(neg_margin=neg_margin)
 
