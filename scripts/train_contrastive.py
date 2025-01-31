@@ -318,6 +318,7 @@ def train_model(model, criterion, optimizer, epoch, scaler=None, alpha=0.5, accu
 if __name__ == '__main__':
     torch.cuda.empty_cache()
     batch_size = args.batch_size * torch.cuda.device_count()
+    print(f"EXPERIMENT INFO: loss name - {args.loss_name}, recon weight - {args.recon_weight}, real weight - {args.real_weight}, delta - {args.delta}, asteps - {args.astep}")
     writeFile = f"../output/{args.dataset_name}/{args.fake_indexes.replace(',', '_')}/" \
                 f"{args.model_name.split('/')[-1]}_{args.input_size}{args.save_flag}/logs"
     store_name = writeFile.replace('/logs', '/weights')
@@ -402,7 +403,7 @@ if __name__ == '__main__':
         start = time.time()
         epoch_start = 1
         num_epochs = 1
-        xdl_test = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.ake_indexes,
+        xdl_test = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes,
                                         phase='test', num_classes=args.num_classes, is_dire=args.is_dire,
                                         post_aug_mode=args.post_aug_mode, inpainting_dir=args.inpainting_dir,
                                         transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop),
