@@ -403,7 +403,7 @@ class MyContrastiveLossEU(GenericPairLoss):
 
 
 class MyContrastiveLossMahal(GenericPairLoss):
-    def __init__(self, neg_margin=1.0, real_weight=0.5,recon_weight=0.1, delta=1.0, reg_lambda=1e-5, **kwargs):
+    def __init__(self, neg_margin=1.0, real_weight=0.5, recon_weight=0.1, delta=1.0, reg_lambda=1e-5, **kwargs):
         super().__init__(mat_based_loss=False, **kwargs)
         self.neg_margin = neg_margin
         self.real_weight = real_weight
@@ -415,68 +415,69 @@ class MyContrastiveLossMahal(GenericPairLoss):
         )
 
     def _compute_loss(self, pos_pair_dist, neg_pair_dist):
-        # For positive pairs, minimize Euclidean distance (close to 0)
         pos_loss = torch.mean(pos_pair_dist ** 2) if pos_pair_dist.numel() > 0 else 0.0
-        
-        # For negative pairs, enforce margin separation
         neg_loss = torch.mean(torch.clamp(self.neg_margin - neg_pair_dist, min=0.0) ** 2) if neg_pair_dist.numel() > 0 else 0.0
         return pos_loss, neg_loss
 
     def forward(self, data, labels):
+        # data: iterable of (real_images, real_recons, fake_images, fake_recons)
         real_images, real_recons, fake_images, fake_recons = zip(*data)
 
-        real_images = torch.stack(real_images)  # shape: [32, 1024]
+        real_images = torch.stack(real_images)      # shape: [B, ...]
         real_recons = torch.stack(real_recons)
         fake_images = torch.stack(fake_images)
         fake_recons = torch.stack(fake_recons)
 
-        # Flatten the images to treat them as feature vectors for distance computation
-        all_images = torch.cat([real_images, real_recons, fake_images, fake_recons], dim=0)  # shape: [128, 1024]
-        breakpoint()
-        all_images_flattened = all_images.view(all_images.size(0), -1)
-        X = all_images_flattened.cpu().detach().numpy()
+        # Flatten images to feature vectors
+        all_images = torch.cat([real_images, real_recons, fake_images, fake_recons], dim=0)  # shape: [4B, ...]
+        all_images_flattened = all_images.view(all_images.size(0), -1)  # shape: [N, D]
+        device = all_images_flattened.device
+        N, D = all_images_flattened.shape
 
-        # Covariance matrix
-        # 1) 공분산 행렬 추정 (rowvar=False => 각 행=샘플, 열=특징)
-        cov = np.cov(X, rowvar=False)  # shape: [D, D]
+        # 1. GPU에서 공분산 및 역행렬 계산 (PyTorch)
+        mean = torch.mean(all_images_flattened, dim=0, keepdim=True)
+        X_centered = all_images_flattened - mean
+        cov = (X_centered.t() @ X_centered) / (N - 1)
+        cov += self.reg_lambda * torch.eye(D, device=device, dtype=all_images_flattened.dtype)
+        cov_d = cov.float()
+        inv_cov = torch.linalg.inv(cov_d)
+        inv_cov = inv_cov.to(all_images_flattened.dtype)
 
-        # 2) 레귤러라이제이션으로 대각선에 작은 값 더해줌
-        cov += self.reg_lambda * np.eye(cov.shape[0], dtype=cov.dtype)
+        # 2. 모든 쌍에 대해 Mahalanobis 거리 계산
+        # diff: [N, N, D] — 모든 쌍의 차이
+        diffs = all_images_flattened.unsqueeze(1) - all_images_flattened.unsqueeze(0)
+        # squared Mahalanobis 거리: [N, N]
+        mdist_sq = torch.einsum('ijk,kl,ijl->ij', diffs, inv_cov, diffs)
+        # 작은 수를 더해 sqrt의 안정성을 확보
+        dist_matrix = torch.sqrt(mdist_sq + 1e-8)
 
-        # 3) 역행렬 계산
-        inv_cov = np.linalg.inv(cov)
-
-        # 4) cdist로 Mahalanobis distance 계산 (metric='mahalanobis', VI=inv_cov)
-        dist_matrix_np = cdist(X, X, metric='mahalanobis', VI=inv_cov)
-        # dist_matrix_np shape: [4B, 4B]
-        dist_matrix = torch.from_numpy(dist_matrix_np).to(all_images_flattened.device)
-
-        # Create masks for real and fake
+        # 3. real, fake 마스크 생성
         labels = labels.reshape(-1)
         real_indices = (labels == 1).nonzero(as_tuple=True)[0]
         fake_indices = (labels == 0).nonzero(as_tuple=True)[0]
 
-        # Positive pairs: real-real distance
-        pos_pair_dist = dist_matrix[real_indices][:, real_indices]
+        # Positive pairs: real-real 거리 (상삼각행렬만 사용)
+        pos_full = dist_matrix[real_indices][:, real_indices]
         tri_u = torch.triu_indices(len(real_indices), len(real_indices), offset=1)
-        pos_pair_dist = pos_pair_dist[tri_u[0], tri_u[1]]  # 상삼각만 취득
+        pos_pair_dist = pos_full[tri_u[0], tri_u[1]]
+        
+        # Negative pairs: real-fake 거리
+        neg_pair_dist = dist_matrix[real_indices][:, fake_indices].reshape(-1)
 
-        # Negative pairs: real-fake distance
-        neg_pair_dist = dist_matrix[real_indices][:, fake_indices].view(-1)
-
-        # Compute contrastive loss using Euclidean distance
+        # Contrastive loss 계산
         pos_loss, neg_loss = self._compute_loss(pos_pair_dist, neg_pair_dist)
         contrastive_loss = pos_loss + neg_loss
 
-
+        # Reconstruction loss 계산
         fake_recon_loss = torch.mean((fake_images - fake_recons) ** 2)
         real_recon_loss = torch.mean(
             torch.clamp(self.delta - torch.norm(real_images - real_recons, dim=1), min=0.0) ** 2
         )
         reconstruction_loss = (1 - self.real_weight) * fake_recon_loss + self.real_weight * real_recon_loss
+        
         total_loss = contrastive_loss + self.recon_weight * reconstruction_loss
-
         return total_loss
+
     
 class MyContrastiveLossManhattan(GenericPairLoss):
     def __init__(self, neg_margin=1.0, real_weight=0.5,recon_weight=0.1, delta=1.0, **kwargs):
