@@ -760,7 +760,7 @@ class MyContrastiveLossManhattan2(GenericPairLoss):
 
     
 
-class MyContrastiveLossNT(GenericPairLoss):
+class MyContrastiveLossNT1(GenericPairLoss):
     def __init__(self, neg_margin=0.1, real_weight=0.5,recon_weight=0.1, delta=1.0, **kwargs):
         super().__init__(mat_based_loss=False, **kwargs)
         self.neg_margin = neg_margin   # use as temperature
@@ -805,6 +805,58 @@ class MyContrastiveLossNT(GenericPairLoss):
         )
         reconstruction_loss = (1 - self.real_weight) * fake_recon_loss + self.real_weight * real_recon_loss
         total_loss = nt_xent_loss + self.recon_weight * reconstruction_loss
+        
+        return total_loss
+    
+
+class MyContrastiveLossNT2(GenericPairLoss):
+    def __init__(self, neg_margin=0.1, recon_weight=0.1, delta=1.0, **kwargs):
+        super().__init__(mat_based_loss=False, **kwargs)
+        self.neg_margin = neg_margin   # use as temperature
+        self.recon_weight = recon_weight
+        self.delta = delta
+        self.criterion = nn.CrossEntropyLoss(reduction="sum")
+        self.simmilarity_f = nn.CosineSimilarity(dim=2)
+        self.add_to_recordable_attributes(
+            list_of_names=["neg_margin", "real_weight", "recon_weight", "delta"], is_stat=False
+        )
+
+
+    def forward(self, data, labels):
+        real_images, real_recons, fake_images, fake_recons = zip(*data)
+
+        real_images = torch.stack(real_images)
+        real_recons = torch.stack(real_recons)
+        fake_images = torch.stack(fake_images)
+        fake_recons = torch.stack(fake_recons)
+
+        # Flatten the images to treat them as feature vectors for distance computation
+        all_images = torch.cat([real_images, real_recons, fake_images, fake_recons], dim=0)
+        all_images_flattened = all_images.view(all_images.size(0), -1)
+
+        # Compute pairwise Mahalanobis distances
+        dist_matrix = self.simmilarity_f(all_images_flattened.unsqueeze(1), all_images_flattened.unsqueeze(0)) / self.neg_margin
+
+        # 자기 자신과의 비교를 막기 위해 마스크 생성 -> 대각선을 -inf로 설정하여 softmax에서 0이 되도록 함
+        batch_size = len(real_images)
+        mask = torch.eye(4 * batch_size, dtype=bool).to(dist_matrix.device)
+        dist_matrix.masked_fill_(mask, float("-inf"))
+
+        B = batch_size
+        pos_labels = torch.cat([torch.arange(B, 2*B), torch.arange(0, B), torch.arange(3*B, 4*B), torch.arange(2*B, 3*B)]).to(dist_matrix.device)
+        nt_xent_loss = F.cross_entropy(dist_matrix, pos_labels)
+
+       
+        real_recon_dist = torch.norm(real_images - real_recons, dim=1, p=2) ** 2
+        fake_recon_dist = torch.norm(fake_images - fake_recons, dim=1, p=2) ** 2
+        # real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
+        # fake_recon_dist = torch.norm(fake_images - fake_recons, p=1, dim=1) 
+
+
+        recon_diff_loss = torch.mean(torch.clamp(real_recon_dist - fake_recon_dist + self.delta, min=0.0))
+
+        # Combine all losses
+        total_loss = nt_xent_loss + self.recon_weight * recon_diff_loss
         
         return total_loss
 
@@ -873,12 +925,16 @@ class CombinedLoss(torch.nn.Module):
             self.loss_fn = MyContrastiveLossMahal2(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
         elif loss_name == 'MyContrastiveLossEU1':
             self.loss_fn = MyContrastiveLossEU1(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
+        elif loss_name == 'MyContrastiveLossEU2':
+            self.loss_fn = MyContrastiveLossEU2(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
         elif loss_name == 'MyContrastiveLossManhattan1':
             self.loss_fn = MyContrastiveLossManhattan1(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
         elif loss_name == 'MyContrastiveLossManhattan2':
             self.loss_fn = MyContrastiveLossManhattan2(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
-        elif loss_name == 'MyContrastiveLossNT':
-            self.loss_fn = MyContrastiveLossNT(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
+        elif loss_name == 'MyContrastiveLossNT1':
+            self.loss_fn = MyContrastiveLossNT1(neg_margin=neg_margin, real_weight=real_weight, recon_weight=recon_weight, delta=delta)
+        elif loss_name == 'MyContrastiveLossNT2':
+            self.loss_fn = MyContrastiveLossNT2(neg_margin=neg_margin, recon_weight=recon_weight, delta=delta)
         else:
             print("INVALID LOSS NAME: Check the loss name")
 
