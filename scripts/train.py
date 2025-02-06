@@ -40,6 +40,8 @@ def get_parser():
     parser.add_argument('--is_amp', action='store_true', help='Whether to using amp autocast(使用混合精度加速)?')
     parser.add_argument("--inpainting_dir", default='full_inpainting', help="rec_image dir", type=str)
     parser.add_argument("--threshold", default=0.5, help="Setting the valid or testing threshold.", type=float)
+    parser.add_argument("--data_size", default=0, help="Setting the data size", type=int)
+    parser.add_argument("--loss_mode", default='drct')
     parser.add_argument("opts", help="Modify config options using the command-line", default=None,
                         nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -69,6 +71,7 @@ from utils.utils import Logger, AverageMeter, Test_time_agumentation, calculate_
 from network.models import get_models
 from data.dataset import AIGCDetectionDataset, CLASS2LABEL_MAPPING, GenImage_LIST
 from data.transform import create_train_transforms, create_val_transforms
+
 
 
 def merge_tensor(img, label, is_train=True):
@@ -110,7 +113,6 @@ def eval_model(model, epoch, eval_loader, is_save=True, is_tta=False, threshold=
     outputs = []
     with torch.no_grad():
         for i, (img, label) in enumerate(eval_process):
-            img = F.normalize(img, p=2, dim=1)
             img, label = merge_tensor(img, label, is_train=False)
             if i > 0 and i % 1 == 0:
                 eval_process.set_description("Epoch: %d, Loss: %.4f, Acc: %.4f" %
@@ -246,7 +248,7 @@ if __name__ == '__main__':
         # setting data loader
         xdl = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes, phase='train',
                                    num_classes=args.num_classes, inpainting_dir=args.inpainting_dir, is_dire=args.is_dire,
-                                   transform=create_train_transforms(size=args.input_size, is_crop=args.is_crop)
+                                   transform=create_train_transforms(size=args.input_size, is_crop=args.is_crop), data_size=args.data_size, mode=args.loss_mode,
                                    )
         sampler = BalanceClassSampler(labels=xdl.get_labels(), mode=args.sampler_mode) if args.sampler_mode != '' else None  # "upsampling"
         train_loader = DataLoader(xdl, batch_size=batch_size, shuffle=sampler is None, num_workers=args.num_workers, sampler=sampler)
@@ -254,7 +256,7 @@ if __name__ == '__main__':
 
         xdl_eval = AIGCDetectionDataset(args.root_path, fake_root_path=args.fake_root_path, fake_indexes=args.fake_indexes, phase='val',
                                         num_classes=args.num_classes, inpainting_dir=args.inpainting_dir, is_dire=args.is_dire,
-                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop)
+                                        transform=create_val_transforms(size=args.input_size, is_crop=args.is_crop), data_size=args.data_size, mode=args.loss_mode,
                                         )
         eval_loader = DataLoader(xdl_eval, batch_size=batch_size, shuffle=False, num_workers=args.num_workers)
         eval_dataset_len = len(xdl_eval)
@@ -315,7 +317,7 @@ if __name__ == '__main__':
                     class_name = list(CLASS2LABEL_MAPPING.keys())[int(args.fake_indexes)]
                 result_str = f'model_path:{args.model_path}, post_aug_mode:{args.post_aug_mode}, class_name:{class_name}\n' \
                              f'acc:{acc:.4f}, auc:{auc:.4f}, recall:{recall:.4f}, precision:{precision:.4f}, ' \
-                             f'f1:{f1:.4f}, fnr: {fnr}\n'
+                             f'f1:{f1:.4f}, fnr: {fnr:.4f}\n'
                 file.write(result_str)
             print(f'The result was saved in {args.save_txt}')
 

@@ -40,7 +40,9 @@ CLASS2LABEL_MAPPING = {
 LABEL2CLASS_MAPPING = {CLASS2LABEL_MAPPING.get(key): key for key in CLASS2LABEL_MAPPING.keys()}
 GenImage_LIST = ['stable_diffusion_v_1_4/imagenet_ai_0419_sdv4', 'stable_diffusion_v_1_5/imagenet_ai_0424_sdv5',
                  'Midjourney/imagenet_midjourney', 'ADM/imagenet_ai_0508_adm', 'wukong/imagenet_ai_0424_wukong',
-                 'glide/imagenet_glide', 'VQDM/imagenet_ai_0419_vqdm', 'BigGAN/imagenet_ai_0419_biggan']
+                 'glide/imagenet_glide', 'VQDM/imagenet_ai_0419_vqdm', 'BigGAN/imagenet_ai_0419_biggan',
+                 'dalle', 'glide_50_27', 'glide_100_10', 'glide_100_27', 'guided', 'ldm_100', 'ldm_200_cfg', 'ldm_200']
+
 
 # 抗JPEG压缩后处理测试
 def cv2_jpg(img, compress_val):
@@ -77,14 +79,13 @@ def resize_long_size(img, long_size=512):
 
 def read_image(image_path, resize_size=None):
     try:
-        image = cv2.imread(image_path)
+        image = Image.open(image_path)
         if resize_size is not None:
-            image = resize_long_size(image, long_size=resize_size)
-        # Revert from BGR
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image = image.resize((resize_size, resize_size), Image.ANTIALIAS)
+        image = np.array(image.convert('RGB'))
         return image, True
-    except:
-        print(f'{image_path} read error!!!')
+    except Exception as e:
+        print(f'{image_path} read error: {e}')
         return np.zeros(shape=(512, 512, 3), dtype=np.uint8), False
 
 
@@ -366,19 +367,23 @@ def load_each_data(real_root_path, fake_root_path,
 
 def load_pair_data(root_path, fake_root_path=None, phase='train', seed=2023, fake_indexes='1',
                    inpainting_dir='full_inpainting'):
-    if fake_root_path is None:  # 推理加载代码，或者用于特征提取
-        assert len(root_path.split(',')) == 2
-        root_path, rec_root_path = root_path.split(',')[:2]
-        image_paths = sorted(glob.glob(f"{root_path}/*.*"))
-        rec_image_paths = sorted(glob.glob(f"{rec_root_path}/*.*"))
-        assert len(image_paths) == len(rec_image_paths)
-        total_paths = []
-        for image_path, rec_image_path in zip(image_paths, rec_image_paths):
-            total_paths.append((image_path, rec_image_path))
+
+    if fake_root_path == 'dire': 
+
+        real_path = os.path.join(root_path, phase, "nature", "crop")
+        fake_path = os.path.join(root_path, phase, "ai", "crop")
+        real_recon_path = os.path.join(root_path, phase, "nature", "inpainting")
+        fake_recon_path = os.path.join(root_path, phase, "ai", "inpainting")
+        real_images = sorted(glob.glob(f"{real_path}/*.*"))
+        fake_images = sorted(glob.glob(f"{fake_path}/*.*"))
+        real_recon_images = sorted(glob.glob(f"{real_recon_path}/*.*"))
+        fake_recon_images = sorted(glob.glob(f"{fake_recon_path}/*.*"))
+        total_paths = list(zip(real_images, real_recon_images)) + list(zip(fake_images, fake_recon_images))
+        labels = [0] * len(real_images) + [1] * len(fake_images)
         print(f'Pair data-{phase}:{len(total_paths)}.')
-        return total_paths
-    assert (len(root_path.split(',')) == 2 and len(fake_root_path.split(',')) == 2) or \
-           (root_path == fake_root_path and 'GenImage' in root_path)
+
+        return total_paths, labels
+    
     if 'MSCOCO' in root_path:
         phase_mapping = {'train': 'train2017', 'val': 'train2017', 'test': 'val2017'}
         real_root, real_rec_root = root_path.split(',')[:2]
@@ -388,7 +393,7 @@ def load_pair_data(root_path, fake_root_path=None, phase='train', seed=2023, fak
         fake_root = f'{fake_root}/{LABEL2CLASS_MAPPING[int(fake_indexes)]}/{phase_mapping[phase]}'
         fake_rec_root = f'{fake_rec_root}/{LABEL2CLASS_MAPPING[int(fake_indexes)]}/{inpainting_dir}/{phase_mapping[phase]}'
         print(f'fake_name:{LABEL2CLASS_MAPPING[int(fake_indexes)]}')
-    elif 'DR/GenImage' in root_path:
+    elif 'DR/GenImage' in root_path and fake_root_path != 'dire':
         phase_mapping = {'train': 'train', 'val': 'train', 'test': 'val'}
         fake_indexes = int(fake_indexes)
         assert 1 <= fake_indexes <= 8 and inpainting_dir in ['inpainting', 'inpainting2', 'inpainting_xl']
@@ -428,6 +433,35 @@ def load_pair_data(root_path, fake_root_path=None, phase='train', seed=2023, fak
     return image_paths, labels
 
 
+def load_face_data(root_path):
+    image_paths = []
+    labels = []
+    real_root_path = os.path.join(root_path, 'wiki')
+    fake_root_path1 = os.path.join(root_path, 'text2img')
+    fake_root_path2 = os.path.join(root_path, 'insight')
+    fake_root_path3 = os.path.join(root_path, 'inpainting')  
+    fake_root_path = [fake_root_path1, fake_root_path2, fake_root_path3]
+
+    for label_folder in os.listdir(real_root_path):
+        folder_path = os.path.join(real_root_path, label_folder)
+        if os.path.isdir(folder_path):
+            for image_path in glob.glob(os.path.join(folder_path, '*.*')):
+                image_paths.append(image_path)
+                labels.append(0)
+                
+    for i, fake_root in enumerate(fake_root_path):
+        for label_folder in os.listdir(fake_root):
+            folder_path = os.path.join(fake_root, label_folder)
+            if os.path.isdir(folder_path):
+                for image_path in glob.glob(os.path.join(folder_path, '*.*')):
+                    image_paths.append(image_path)
+                    labels.append(i+1)
+    
+    combined = list(zip(image_paths, labels))
+    random.shuffle(combined)
+    return list(zip(*combined))
+
+
 class AIGCDetectionDataset(Dataset):
     def __init__(self, root_path='/disk4/chenby/dataset/MSCOCO', fake_root_path='/disk4/chenby/dataset/DRCT-2M',
                  fake_indexes='1,2,3,4,5,6', phase='train', is_one_hot=False, seed=2021,
@@ -453,6 +487,7 @@ class AIGCDetectionDataset(Dataset):
                 self.image_paths, self.labels = load_pair_data(root_path, fake_root_path, phase,
                                                                fake_indexes=fake_indexes,
                                                                inpainting_dir=inpainting_dir)
+                
             elif 'MSCOCO' in root_path and len(fake_root_path.split(',')) == 1:
                 self.image_paths, self.labels = load_DRCT_2M(real_root_path=root_path,
                                                              fake_root_path=fake_root_path,
@@ -460,6 +495,8 @@ class AIGCDetectionDataset(Dataset):
             elif 'GenImage' in root_path and fake_root_path == '':
                 self.image_paths, self.labels = load_GenImage(root_path=root_path, phase=phase, seed=seed,
                                                               indexes=fake_indexes)
+            elif 'Face' in root_path: 
+                self.image_paths, self.labels = load_face_data(root_path=root_path)
             else:
                 if self.mode == 'drct':
                     self.image_paths, self.labels = load_data(real_root_path=root_path, fake_root_path=fake_root_path,
@@ -472,6 +509,7 @@ class AIGCDetectionDataset(Dataset):
             else:
                 # labels: [(0, 1.2, 1, 1), ...]
                 self.labels = [tuple(int(l > 0) for l in label) for label in self.labels if self.num_classes == 2]
+
         else:
             if len(root_path.split(',')) == 2 and 'DR' in root_path:
                 self.is_dire = True
@@ -482,6 +520,8 @@ class AIGCDetectionDataset(Dataset):
                     self.image_paths = sorted(find_images(dir_path=root_path, extensions=['.jpg', '.png', '.jpeg', '.bmp']))
                 else:
                     self.image_paths = sorted(glob.glob(f'{root_path}/{self.regex}'))[:]
+                
+                
             print(f'Total predict images:{len(self.image_paths)}, regex:{self.regex}')
         if self.phase == 'test' and self.post_aug_mode is not None:
             print(f"post_aug_mode:{self.post_aug_mode}, {self.post_aug_mode.split('_')[1]}")
@@ -491,6 +531,7 @@ class AIGCDetectionDataset(Dataset):
 
     def get_labels(self):
         return list(self.labels)
+    
 
     def __getitem__(self, index):
         if self.mode == 'drct':
@@ -504,21 +545,24 @@ class AIGCDetectionDataset(Dataset):
                 is_success = is_success and rec_is_success
                 image = calculate_dire(image, rec_image, phase=self.phase)
             # 후처리 공격 테스트 (optional)
-            if self.phase == 'test' and self.post_aug_mode is not None:
-                if 'jpeg' in self.post_aug_mode:
-                    compress_val = int(self.post_aug_mode.split('_')[1])
-                    image = cv2_jpg(image, compress_val)
-                elif 'scale' in self.post_aug_mode:
-                    scale = float(self.post_aug_mode.split('_')[1])
-                    image = cv2_scale(image, scale)
-                elif 'blur' in self.post_aug_mode:
-                    # 블러 커널 크기 지정 (예: "blur_5" -> 커널 크기 5x5)
-                    kernel_size = int(self.post_aug_mode.split('_')[1])
-                    real = cv2.GaussianBlur(real, (kernel_size, kernel_size), 0)
-                    real_recon = cv2.GaussianBlur(real_recon, (kernel_size, kernel_size), 0)
-                    fake = cv2.GaussianBlur(fake, (kernel_size, kernel_size), 0)
-                    fake_recon = cv2.GaussianBlur(fake_recon, (kernel_size, kernel_size), 0)
 
+            
+            if self.phase == 'test' and self.post_aug_mode is not None:
+                if random.random() < 0.7:
+                    if 'jpeg' in self.post_aug_mode:
+                        compress_val = int(self.post_aug_mode.split('_')[1])
+                        image = cv2_jpg(image, compress_val)
+                    elif 'scale' in self.post_aug_mode:
+                        scale = float(self.post_aug_mode.split('_')[1])
+                        image = cv2_scale(image, scale)
+                    elif 'blur' in self.post_aug_mode:
+                        # 블러 커널 크기 지정 (예: "blur_5" -> 커널 크기 5x5)
+                        kernel_size = int(self.post_aug_mode.split('_')[1])
+                        image = cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+                    elif 'bright' in self.post_aug_mode:
+                        bright_val = int(self.post_aug_mode.split('_')[1])
+                        image = cv2.convertScaleAbs(image, alpha=1, beta=bright_val)
+    
             label = 0  # default label
             if self.use_label:
                 label = self.labels[index] if is_success else 0

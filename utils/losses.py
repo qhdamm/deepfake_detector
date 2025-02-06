@@ -271,6 +271,10 @@ class MyContrastiveLoss2(GenericPairLoss):
         contrastive_loss = pos_loss + neg_loss
 
         # Compute reconstruction difference loss
+        real_images = F.normalize(real_images, p=2, dim=1)  
+        real_recons = F.normalize(real_recons, p=2, dim=1)  
+        fake_images = F.normalize(fake_images, p=2, dim=1)  
+        fake_recons = F.normalize(fake_recons, p=2, dim=1)  
         real_recon_dist = torch.norm(real_images - real_recons, dim=1, p=2) ** 2
         fake_recon_dist = torch.norm(fake_images - fake_recons, dim=1, p=2) ** 2
         # real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
@@ -392,6 +396,7 @@ class MyContrastiveLossEU1(GenericPairLoss):
         contrastive_loss = pos_loss + neg_loss
 
         # Compute reconstruction difference loss (L1 distance)
+        
         fake_recon_loss = torch.mean((fake_images - fake_recons) ** 2)
         real_recon_loss = torch.mean(
             torch.clamp(self.delta - torch.norm(real_images - real_recons, dim=1), min=0.0) ** 2
@@ -453,6 +458,10 @@ class MyContrastiveLossEU2(GenericPairLoss):
         contrastive_loss = pos_loss + neg_loss
 
         # Compute reconstruction difference loss
+        real_images = F.normalize(real_images, p=2, dim=1)  
+        real_recons = F.normalize(real_recons, p=2, dim=1)  
+        fake_images = F.normalize(fake_images, p=2, dim=1)  
+        fake_recons = F.normalize(fake_recons, p=2, dim=1)  
         real_recon_dist = torch.norm(real_images - real_recons, dim=1, p=2) ** 2
         fake_recon_dist = torch.norm(fake_images - fake_recons, dim=1, p=2) ** 2
         # real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
@@ -618,6 +627,11 @@ class MyContrastiveLossMahal2(GenericPairLoss):
        
 
         # Compute reconstruction difference loss
+        real_images = F.normalize(real_images, p=2, dim=1)  
+        real_recons = F.normalize(real_recons, p=2, dim=1)  
+        fake_images = F.normalize(fake_images, p=2, dim=1)  
+        fake_recons = F.normalize(fake_recons, p=2, dim=1)  
+
         real_recon_dist = torch.norm(real_images - real_recons, dim=1, p=2) ** 2
         fake_recon_dist = torch.norm(fake_images - fake_recons, dim=1, p=2) ** 2
         # real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
@@ -745,6 +759,10 @@ class MyContrastiveLossManhattan2(GenericPairLoss):
         contrastive_loss = pos_loss + neg_loss
 
         # Compute reconstruction difference loss
+        real_images = F.normalize(real_images, p=2, dim=1)  
+        real_recons = F.normalize(real_recons, p=2, dim=1)  
+        fake_images = F.normalize(fake_images, p=2, dim=1)  
+        fake_recons = F.normalize(fake_recons, p=2, dim=1)  
         real_recon_dist = torch.norm(real_images - real_recons, dim=1, p=2) ** 2
         fake_recon_dist = torch.norm(fake_images - fake_recons, dim=1, p=2) ** 2
         # real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)
@@ -845,8 +863,11 @@ class MyContrastiveLossNT2(GenericPairLoss):
         B = batch_size
         pos_labels = torch.cat([torch.arange(B, 2*B), torch.arange(0, B), torch.arange(3*B, 4*B), torch.arange(2*B, 3*B)]).to(dist_matrix.device)
         nt_xent_loss = F.cross_entropy(dist_matrix, pos_labels)
-
-       
+ 
+        real_images = F.normalize(real_images, p=2, dim=1)  
+        real_recons = F.normalize(real_recons, p=2, dim=1)  
+        fake_images = F.normalize(fake_images, p=2, dim=1)  
+        fake_recons = F.normalize(fake_recons, p=2, dim=1)  
         real_recon_dist = torch.norm(real_images - real_recons, dim=1, p=2) ** 2
         fake_recon_dist = torch.norm(fake_images - fake_recons, dim=1, p=2) ** 2
         # real_recon_dist = torch.norm(real_images - real_recons, p=1, dim=1)

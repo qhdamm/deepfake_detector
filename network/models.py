@@ -181,6 +181,7 @@ def get_convnext(model_name='convnext_base_in22k', pretrained=True, num_classes=
     return net
 
 
+
 def get_resnet(model_name='resnet200d', pretrained=True, num_classes=2):
     """
     :param model_name: resnet200d, input_size=512, resnet50
