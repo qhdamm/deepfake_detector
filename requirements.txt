@@ -1,4 +1,3 @@
--i https://mirrors.aliyun.com/pypi/simple
 torch
 torchvision
 catalyst
