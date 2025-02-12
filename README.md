@@ -1,131 +1,47 @@
-# DRCT: Diffusion Reconstruction Contrastive Training towards Universal Detection of Diffusion Generated Images
-The official code of [DRCT: Diffusion Reconstruction Contrastive Training towards Universe Detection of Diffusion Generated Images](https://icml.cc/virtual/2024/poster/33086) ([pdf](https://raw.githubusercontent.com/mlresearch/v235/main/assets/chen24ay/chen24ay.pdf)), 
-which was accepted by ICML2024 Spotlight.
-## DRCT
-The DRCT framework consists of two stages:
-- Diffusion Reconstruction. An original image (either real or fake) undergoes a diffusion-then-reconstruction process, resulting in its reconstructed version that retains the original content while containing subtle diffusion artifacts.
-- Contrastive Training. The detector is trained under the guidance of margin-based contrastive loss on real images, generated images, and their reconstructed counterparts (real rec. and fake rec.). In contrastive training, real images are labeled as “Real”, while the other three types of images are labeled as “Fake”.
-![DRCT](./figures/DRCT.png)
-<p align="center">The framework of our proposed DRCT.</p>
+# Diffusion-Generated Image Detection
 
-## DRCT-2M Dataset
-The proposed dataset "DRCT-2M" has been released on [modelscope](https://modelscope.cn/datasets/BokingChen/DRCT-2M/files).
-![DRCT-2M](./figures/DRCT-2M.png)
-<p align="center">Some examples of generated images in DRCT-2M.</p>
 
-## Diffusion Reconstruction
-```
-python data/diffusion_rec.py
+## Introduction
+This project focuses on detecting diffusion-generated images using a robust dual loss learning approach. Inspired by recent research (DRCT), I applied a margin-based contrastive loss to perform contrastive learning between original and reconstructed images. This method helps the model effectively classify difficult samples, contributing to the development of a more generalized detector.
+
+## Dual Loss Learning
+Figure 3 illustrates the overall process of dual loss learning. Real and fake images were reconstructed using a stable diffusion inpainting model. I then extracted 1024-dimensional embeddings from the layer before the fully connected (FC) layer of ConvNeXt-base. Contrastive loss and reconstruction loss were calculated from these embeddings. The dual loss function is defined as follows:
+
+```math
+L_{dual} = L_{contrastive} + \lambda L_{recon}
 ```
 
-## Training and Validation
-### Training On ConvB
-```convnext_base_in22k
-# real_path: /disk1/chenby/dataset/AIGC_data/DRCT_data/MSCOCO/train2017
-# real_rec_path: /disk1/chenby/dataset/AIGC_data/DRCT_data/DRCT-2M/stable-diffusion-inpainting/train2017
-# fake_path: /disk1/chenby/dataset/AIGC_data/DRCT_data/DRCT-2M/stable-diffusion-v1-4/train2017,
-# fake_rec_path: /disk1/chenby/dataset/AIGC_data/DRCT_data/DR/DRCT-2M/stable-diffusion-v1-4/full_inpainting/train2017 
-python train_contrastive.py --root_path /disk1/chenby/dataset/AIGC_data/DRCT_data/MSCOCO/train2017 \
-                            --fake_root_path /disk1/chenby/dataset/AIGC_data/DRCT_data/DRCT-2M/stable-diffusion-inpainting/train2017,/disk1/chenby/dataset/AIGC_data/DRCT_data/DRCT-2M/stable-diffusion-v1-4/train2017,/disk1/chenby/dataset/AIGC_data/DRCT_data/DR/DRCT-2M/stable-diffusion-v1-4/full_inpainting/train2017 \
-                            --dataset_name DRCT-2M \
-                            --model_name convnext_base_in22k \
-                            --embedding_size 1024 \
-                            --input_size 224 \
-                            --batch_size 64 \
-                            --fake_indexes 2 \
-                            --num_epochs 17 \
-                            --device_id 2,3 \
-                            --lr 0.0001 \
-                            --is_amp \
-                            --is_crop \
-                            --num_workers 12 \
-                            --save_flag _drct_amp_crop
+where \(\lambda\) is the weight applied to the reconstruction loss, set to \(0.05\). Dual loss is combined with binary cross-entropy loss to enhance the ability of ConvNeXt to distinguish between fake and real images.
+
+## Contrastive Loss
+The contrastive loss follows the equation:
+
+```math
+L_{contrastive} = \frac{1}{N_{pos}} \sum_{(i,j) \in P} \left(1 - \text{dist}(z_i, z_j)\right)^2 + \frac{1}{N_{neg}} \sum_{(i,j) \in N} \max \left( \text{dist}(z_i, z_j) - m, 0 \right)^2
 ```
 
-### Training On UnivFD
-```clip-ViT-L-14
-python train_contrastive.py --root_path /disk1/chenby/dataset/AIGC_data/DRCT_data/MSCOCO/train2017 \
-                            --fake_root_path /disk1/chenby/dataset/AIGC_data/DRCT_data/DRCT-2M/stable-diffusion-inpainting/train2017,/disk1/chenby/dataset/AIGC_data/DRCT_data/DRCT-2M/stable-diffusion-v1-4/train2017,/disk1/chenby/dataset/AIGC_data/DRCT_data/DR/DRCT-2M/stable-diffusion-v1-4/full_inpainting/train2017 \
-                            --dataset_name DRCT-2M \
-                            --model_name clip-ViT-L-14 \
-                            --freeze_extractor \
-                            --embedding_size 1024 \
-                            --input_size 224 \
-                            --batch_size 256 \
-                            --fake_indexes 2 \
-                            --num_epochs 17 \
-                            --device_id 4,5 \
-                            --lr 0.0001 \
-                            --is_amp \
-                            --is_crop \
-                            --num_workers 12 \
-                            --save_flag _drct_amp_crop
-```
-## Testing 
-- download pretrained weights in modelscope: [pretrained.zip](https://modelscope.cn/datasets/BokingChen/DRCT-2M/files)
-### Intra-Dataset
-- trained and tested on DRCT-2M
-```
-# test on DRCT-2M using ConvB (DR=SDv1)
-bash test_DRCT-2M.sh convnext_base_in22k ../output/pretrained/DRCT-2M/sdv14/convnext_base_in22k_224_drct_amp_crop/14_acc0.9996.pth 0 1024
-# test on DRCT-2M using ConvB (DR=SDv2)
-bash test_DRCT-2M.sh convnext_base_in22k ../output/pretrained/DRCT-2M/sdv2/convnext_base_in22k_224_drct_amp_crop/16_acc0.9993.pth 0 1024
-# test on DRCT-2M using UnivFD (DR=SDv1)
-bash test_DRCT-2M.sh clip-ViT-L-14 ../output/pretrained/DRCT-2M/sdv14/clip-ViT-L-14_224_drct_amp_crop/13_acc0.9664.pth 0 1024
-# test on DRCT-2M using UnivFD (DR=SDv2)
-bash test_DRCT-2M.sh clip-ViT-L-14 ../output/pretrained/DRCT-2M/sdv2/clip-ViT-L-14_224_drct_amp_crop/last_acc0.9112.pth 0 1024
+where \(N_{pos}\) is the number of positive pairs, \(P\) represents the positive pairs set, \(N_{neg}\) is the number of negative pairs, and \(N\) represents the negative pairs set. The distance metric \(\text{dist}\) defaults to cosine distance.
 
-```
-- trained and tested on GenImage
-```
-# test on DRCT-2M using ConvB (DR=SDv1)
-bash test_GenImage.sh convnext_base_in22k ../output/pretrained/GenImage/sdv14/convnext_base_in22k_224_drct_amp_crop/last_acc0.9991.pth 0 1024
-# test on DRCT-2M using UnivFD (DR=SDv1)
-bash test_GenImage.sh clip-ViT-L-14 ../output/pretrained/GenImage/sdv14/clip-ViT-L-14_224_drct_amp_crop/2_acc0.9558.pth 0 1024
-```
-### Cross-Dataset 
-- trained on DRCT-2M and tested on GenImage
-```
-# test on GenImage using ConvB (DR=SDv1)
-bash test_GenImage.sh convnext_base_in22k ../output/pretrained/DRCT-2M/sdv14/convnext_base_in22k_224_drct_amp_crop/14_acc0.9996.pth 7 1024
-# test on GenImage using ConvB (DR=SDv2)
-bash test_GenImage.sh convnext_base_in22k ../output/pretrained/DRCT-2M/sdv2/convnext_base_in22k_224_drct_amp_crop/16_acc0.9993.pth 0 1024
-# test on GenImage using UnivFD (DR=SDv1)
-bash test_GenImage.sh clip-ViT-L-14 ../output/pretrained/DRCT-2M/sdv14/clip-ViT-L-14_224_drct_amp_crop/13_acc0.9664.pth 0 1024
-# test on GenImage using UnivFD (DR=SDv2)
-bash test_GenImage.sh clip-ViT-L-14 ../output/pretrained/DRCT-2M/sdv2/clip-ViT-L-14_224_drct_amp_crop/last_acc0.9112.pth 0 1024
+Positive pairs consist of real reconstructed images, fake images, and fake reconstructed images, while negative pairs only include real images. As a result, the model learns to distinguish real reconstructed images more effectively from real images, leading to higher accuracy.
+
+## Reconstruction Loss
+The reconstruction loss is designed to increase the distance between real images and their reconstructions while reducing the distance between fake images and their reconstructions. It serves two main purposes:
+1. Enhancing the training process efficiency.
+2. Regulating the distance between real reconstructed images and fake reconstructed images.
+
+By complementing contrastive loss, reconstruction loss accelerates training. Without it, training required over 15 epochs, whereas adding reconstruction loss reduced the necessary epochs to fewer than 5. Furthermore, if real reconstructed images and fake images become too similar, the model may overfit to the training data, degrading performance on images generated by different models. Since diffusion models differ in their generated image distributions, maintaining an appropriate distance via reconstruction loss improves generalization performance.
+
+The reconstruction loss is defined as:
+
+```math
+L_{recon} = \frac{1}{N} \sum_i \max \left( \| x_i - \hat{x}_i \|_2^2 - \| y_i - \hat{y}_i \|_2^2 + \gamma, 0 \right)
 ```
 
-## Experimental Results
-### Intra-Dataset Evaluation
-- trained and tested on DRCT-2M
-![DRCT-2M](./figures/Intra.png)
-- trained and tested on GenImage
-![GenImage](./figures/Intra_GenImage.png)
+where \(N\) is the number of samples, and all image embeddings are normalized. \(\gamma\) ensures a sufficient difference between real and fake reconstruction errors.
 
-### Cross-Dataset Evaluation
-- trained on DRCT-2M and tested on GenImage
-![GenImage](./figures/Cross.png)
+The figure above compares embedding distances before and after applying reconstruction loss. In (a), where only contrastive loss was used, the embeddings of three image types (real reconstructed images, fake images, and fake reconstructed images) are closely positioned. However, after adding reconstruction loss, as shown in (b), real reconstructed images maintain a slight distance from the other two types. The accuracy on the GenImage dataset increased from \(77.18\%\) (contrastive loss only) to \(81.01\%\), demonstrating the significance of reconstruction loss.
 
-## Acknowledgments
-Our code is developed based on [CNNDetection](https://github.com/peterwang512/CNNDetection), [FreDect](https://github.com/RUB-SysSec/GANDCTAnalysis), [Gram-Net](https://github.com/liuzhengzhe/Global_Texture_Enhancement_for_Fake_Face_Detection_in_the-Wild)
-, [DIRE](https://github.com/ZhendongWang6/DIRE), [UnivFD](https://github.com/Yuheng-Li/UniversalFakeDetect) . Thanks for their sharing codes and models:
+## Conclusion
+This project implements a dual loss learning approach to improve the detection of diffusion-generated images. By integrating contrastive loss with reconstruction loss, the model effectively generalizes to various generative models. The approach not only improves accuracy but also accelerates training, making it practical for real-world applications.
 
-## Citation
-If you find this work useful for your research, please kindly cite our paper:
-```
-@InProceedings{pmlr-v235-chen24ay,
-  title = 	 {{DRCT}: Diffusion Reconstruction Contrastive Training towards Universal Detection of Diffusion Generated Images},
-  author =       {Chen, Baoying and Zeng, Jishen and Yang, Jianquan and Yang, Rui},
-  booktitle = 	 {Proceedings of the 41st International Conference on Machine Learning},
-  pages = 	 {7621--7639},
-  year = 	 {2024},
-  editor = 	 {Salakhutdinov, Ruslan and Kolter, Zico and Heller, Katherine and Weller, Adrian and Oliver, Nuria and Scarlett, Jonathan and Berkenkamp, Felix},
-  volume = 	 {235},
-  series = 	 {Proceedings of Machine Learning Research},
-  month = 	 {21--27 Jul},
-  publisher =    {PMLR},
-  pdf = 	 {https://raw.githubusercontent.com/mlresearch/v235/main/assets/chen24ay/chen24ay.pdf},
-  url = 	 {https://proceedings.mlr.press/v235/chen24ay.html}
-}
-```
+
