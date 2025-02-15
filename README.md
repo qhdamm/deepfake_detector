@@ -46,7 +46,7 @@ The figure above compares embedding distances before and after applying reconstr
 
 The tables below present a performance comparison across different generative models.
 
-### Table 1: Detection Performance on GenImage dataset, trained on GenImage/SD1.4
+#### Table 1: Detection Performance on GenImage dataset, trained on GenImage/SD1.4
 
 | Model  | SD1.4  | SD1.5  | Midjourney | ADM   | Wukong | Glide  | VQDM   | BigGAN  | Average  |
 |--------|------:|------:|-----------:|------:|-------:|------:|------:|------:|--------:|
@@ -54,7 +54,7 @@ The tables below present a performance comparison across different generative mo
 | DRCT   | 0.9978 | 0.9976 | 0.8862  | 0.5735 | 0.9976 | 0.5584 | 0.6221 | 0.5409 | 0.7718  |
 | **Ours**  | **0.9968** | **0.9959** | **0.8952** | **0.6407** | **0.9968** | **0.6663** | **0.7843** | **0.6372** | **0.8267** |
 
-### Table 2: Detection Performance on UniversalFakeDetect dataset, trained on GenImage/SD1.4
+#### Table 2: Detection Performance on UniversalFakeDetect dataset, trained on GenImage/SD1.4
 
 | Model  | DALLE | Glide_50_27 | Glide_100_10 | Glide_100_27 | Guided | LDM_100 | LDM_200_CFG | LDM_200 | Average  |
 |--------|------:|------------:|-------------:|-------------:|-------:|--------:|------------:|--------:|--------:|
