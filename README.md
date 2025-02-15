@@ -45,3 +45,6 @@ The figure above compares embedding distances before and after applying reconstr
 ## Conclusion
 This project implements a dual loss learning approach to improve the detection of diffusion-generated images. By integrating contrastive loss with reconstruction loss, the model effectively generalizes to various generative models. The approach not only improves accuracy but also accelerates training, making it practical for real-world applications.
 
+This code is based on [DRCT](https://github.com/beibuwandeluori/DRCT.git).
+
+
